@@ -1,0 +1,85 @@
+# Template for a development-environment cap overlay. Copy beside the project's
+# compose file, delete the services it does not have, size the rest from
+# measurement, and use it with -f:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.limits.yml up -d
+#
+# Sizing rule: take the measured steady-state RSS under the workload that has
+# to keep passing (usually the e2e suite), add roughly half again, round up.
+# Guessing low turns a swap problem into an OOM-kill problem.
+#
+# `memswap_limit` equal to `mem_limit` is the line that matters — see the
+# rig-devenv skill. Every other setting only reduces how often the cap is hit.
+
+services:
+
+  postgres:
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 2.0
+    # Durability off. Correct ONLY for a database a migration command recreates.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - max_connections=50
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - autovacuum_naptime=60s
+
+  redis:
+    mem_limit: 192m
+    memswap_limit: 192m
+    cpus: 0.5
+    # `--save ""` disables RDB snapshots: no periodic fork, no background writes.
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
+
+  kafka:
+    mem_limit: 896m
+    memswap_limit: 896m
+    cpus: 2.0
+    environment:
+      # ActiveProcessorCount is the one that matters: without it the JVM sizes
+      # its GC and IO thread pools for every host thread, per broker.
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m -XX:ActiveProcessorCount=2"
+      KAFKA_CFG_NUM_PARTITIONS: "1"
+      KAFKA_CFG_NUM_NETWORK_THREADS: "2"
+      KAFKA_CFG_NUM_IO_THREADS: "2"
+      KAFKA_CFG_BACKGROUND_THREADS: "2"
+      KAFKA_CFG_NUM_RECOVERY_THREADS_PER_DATA_DIR: "1"
+      KAFKA_CFG_LOG_RETENTION_HOURS: "2"
+      KAFKA_CFG_LOG_SEGMENT_BYTES: "16777216"
+      KAFKA_CFG_LOG_CLEANER_ENABLE: "false"
+
+  elasticsearch:
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 2.0
+    environment:
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m -XX:ActiveProcessorCount=2"
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+
+# Node services usually share a YAML anchor in the base file. Give them their
+# own anchor here rather than repeating the block.
+x-app-limits: &app-limits
+  mem_limit: 640m
+  memswap_limit: 640m
+  cpus: 1.5
+  # `unless-stopped` on a service whose dependency died retries forever. Three
+  # attempts then a stopped container is a visible failure instead of load.
+  restart: on-failure:3
+  environment:
+    NODE_OPTIONS: "--max-old-space-size=448"
+
+# services:
+#   api:
+#     <<: *app-limits
+#   worker:
+#     <<: *app-limits

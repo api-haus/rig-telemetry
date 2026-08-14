@@ -30,9 +30,16 @@ VERDICT: MEMORY THRASH — swap is eating the disk
 ## Run it
 
 ```
+git clone https://github.com/api-haus/rig-telemetry
+cd rig-telemetry
+cp .env.example .env      # optional; every value has a working default
 docker compose up -d
 tools/rig health
 ```
+
+On hardware other than the author's, read
+[docs/adapting.md](docs/adapting.md) first — sensor names and the NVIDIA
+library path are the only machine-specific parts.
 
 Grafana <http://localhost:13337> — anonymous viewing is on, `admin` / `admin` to
 edit. Prometheus <http://localhost:13390>. Both bind to loopback only.
@@ -82,9 +89,34 @@ month earlier. A 15% rise is dust, not weather and not workload.
 `rig thermals` prints the comparison; `docs/thermals.md` explains the method
 and where it can lie. It needs 37 days of history before it says anything.
 
+## Claude Code plugin
+
+This repo is also a Claude Code plugin. Installing it puts `rig` on PATH and
+adds three skills, so an agent can answer "why is this machine slow" without
+being told how.
+
+```
+/plugin marketplace add api-haus/rig-telemetry
+/plugin install rig-telemetry@rig-telemetry
+```
+
+| Skill | Fires on |
+| --- | --- |
+| `rig-diagnose` | machine slow, loaded, thrashing, "what is using my CPU", "what happened last night" |
+| `rig-devenv` | a project's containers, brokers, watchers or toolchains are loading the machine |
+| `rig-thermals` | heat, fans, throttling, "does my PC need cleaning" |
+
+The plugin ships the whole stack, so the installed copy can run it directly.
+`rig where` resolves the root on any machine — it prefers the checkout a
+running stack was started from, then this plugin's copy;
+`$RIG_TELEMETRY_HOME` overrides both. Nothing hardcodes a path.
+
+`rig` itself only needs the Prometheus endpoint, so it works from any
+directory, and against a remote host via `RIG_PROMETHEUS=http://host:13390`.
+
 ## For agents
 
-Read [AGENTS.md](AGENTS.md). Short version: run `tools/rig why`.
+Read [AGENTS.md](AGENTS.md). Short version: run `rig why`.
 
 ## Durability
 
@@ -106,7 +138,10 @@ process-exporter/config.yml   process group definitions
 grafana/                      datasource, dashboard provider, generated dashboards
 tools/rig                     the CLI
 tools/gen-dashboards.py       dashboard generator
-docs/                         metrics reference, thermal method, runbook
+bin/rig                       PATH shim, added automatically by the plugin
+.claude-plugin/               plugin and marketplace manifests
+skills/                       rig-diagnose, rig-devenv, rig-thermals
+docs/                         metrics, thermal method, runbook, adapting
 ```
 
 ## Docs
@@ -115,6 +150,7 @@ docs/                         metrics reference, thermal method, runbook
 - [docs/metrics.md](docs/metrics.md) — every series, explained
 - [docs/thermals.md](docs/thermals.md) — how the dust detection works
 - [docs/runbook.md](docs/runbook.md) — operations, upgrades, retention, backup
+- [docs/adapting.md](docs/adapting.md) — running this on different hardware
 
 ## Licence
 

@@ -78,7 +78,8 @@ def targets(queries):
 
 
 def ts(L, title, queries, *, unit="short", w=12, h=8, stack=False, fill=0,
-       desc="", min_=None, max_=None, thresholds=None, legend_calcs=("last", "max")):
+       desc="", min_=None, max_=None, thresholds=None, legend_calcs=("last", "max"),
+       time_from=None, no_value=None):
     custom = {
         "drawStyle": "line", "lineWidth": 1, "fillOpacity": fill,
         "gradientMode": "opacity", "showPoints": "never",
@@ -89,7 +90,7 @@ def ts(L, title, queries, *, unit="short", w=12, h=8, stack=False, fill=0,
         custom["fillOpacity"] = fill or 40
     if thresholds:
         custom["thresholdsStyle"] = {"mode": "dashed"}
-    return L.place({
+    panel = {
         "type": "timeseries", "title": title, "description": desc, "datasource": DS,
         "targets": targets(queries),
         "fieldConfig": {
@@ -97,6 +98,7 @@ def ts(L, title, queries, *, unit="short", w=12, h=8, stack=False, fill=0,
                 "unit": unit, "custom": custom,
                 "thresholds": thresholds or {"mode": "absolute", "steps": [{"color": "green", "value": None}]},
                 "min": min_, "max": max_,
+                **({"noValue": no_value} if no_value else {}),
             },
             "overrides": [],
         },
@@ -105,7 +107,10 @@ def ts(L, title, queries, *, unit="short", w=12, h=8, stack=False, fill=0,
                        "calcs": list(legend_calcs), "showLegend": True},
             "tooltip": {"mode": "multi", "sort": "desc"},
         },
-    }, w, h)
+    }
+    if time_from:
+        panel["timeFrom"] = time_from
+    return L.place(panel, w, h)
 
 
 def stat(L, title, expr, *, unit="short", w=3, h=4, desc="", thresholds=None,
@@ -302,10 +307,11 @@ def thermals():
         ("rig:thermal:radiator_degradation_ratio", "radiator"),
         ("rig:thermal:cpu_degradation_ratio", "CPU path overall"),
         ("rig:thermal:mount_degradation_ratio", "cold plate / paste"),
-    ], unit="none", w=12, min_=0.8, max_=1.5,
+    ], unit="none", w=12, min_=0.8, max_=1.5, time_from="90d",
+       no_value="No baseline yet — needs 37 days of history (7-day window vs. the same week 30 days earlier).",
        desc=("1.0 = same cooling as a month ago. 1.15+ on the GPU or radiator line is dust: the same watts "
              "now need more degrees to move. The cold plate line separates dried paste from a dirty radiator. "
-             "Empty until 37 days of history exist."))
+             "This panel always shows 90 days regardless of the dashboard range."))
     ts(L, "Heat path, split", [
         ("rig:thermal:die_to_coolant_c", "die -> coolant (mount + paste)"),
         ("rig:thermal:coolant_rise_c", "coolant -> case air (radiator)"),
@@ -324,8 +330,10 @@ def thermals():
         ("rig:thermal:gpu_resistance_c_per_w", "instant"),
         ("rig:thermal:gpu_resistance_c_per_w:avg1h", "1h average"),
         ("rig:thermal:gpu_resistance_c_per_w:avg7d", "7d average"),
-    ], unit="none", w=12,
-       desc="Degrees above case air per watt dissipated. A hardware property, so it is comparable across months. Only sampled above 60 W.")
+    ], unit="none", w=12, time_from="30d",
+       no_value="No sample yet — the GPU must draw at least 60 W for this to mean anything.",
+       desc=("Degrees above case air per watt dissipated. A hardware property, so it is comparable across "
+             "months. Only sampled above 60 W, so an idle GPU leaves this empty. Always shows 30 days."))
     ts(L, "Fans and pump", [("rig:fan_rpm", "{{chip_name}} {{label}}")], unit="rotrpm", w=12)
     ts(L, "Coolant", [
         ("rig:coolant_in_celsius", "loop in"),
@@ -335,7 +343,7 @@ def thermals():
 
     return dashboard("rig-thermals", "Rig — Thermals",
                      "Temperatures, and the month-over-month cooling efficiency trend that tells you when the machine needs cleaning.",
-                     L, time_from="now-30d", refresh="1m", tags=["thermal"])
+                     L, time_from="now-6h", refresh="30s", tags=["thermal"])
 
 
 # --------------------------------------------------------------------------

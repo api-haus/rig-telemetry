@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -21,6 +23,30 @@ from datetime import datetime, timedelta, timezone
 
 PROM = os.environ.get("RIG_PROMETHEUS", "http://127.0.0.1:13390")
 TIMEOUT = float(os.environ.get("RIG_TIMEOUT", "30"))
+HERE = pathlib.Path(__file__).resolve().parent.parent
+
+
+def stack_root() -> tuple[pathlib.Path, str]:
+    """Where the stack lives, and how that was determined.
+
+    A running stack wins over this checkout: the same `rig` may be invoked from
+    a plugin copy while the compose project was started from a clone elsewhere,
+    and `docker compose` commands have to reach the one that is actually up.
+    """
+    env = os.environ.get("RIG_TELEMETRY_HOME")
+    if env and (pathlib.Path(env) / "docker-compose.yml").is_file():
+        return pathlib.Path(env), "RIG_TELEMETRY_HOME"
+    try:
+        out = subprocess.run(
+            ["docker", "inspect", "rig-prometheus", "--format",
+             '{{index .Config.Labels "com.docker.compose.project.working_dir"}}'],
+            capture_output=True, text=True, timeout=10)
+        path = pathlib.Path(out.stdout.strip())
+        if out.returncode == 0 and out.stdout.strip() and (path / "docker-compose.yml").is_file():
+            return path, "running stack"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return HERE, "this checkout"
 
 UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "y": 31536000}
 
@@ -45,7 +71,12 @@ def _call(path: str, params: dict, method: str = "POST") -> dict:
     except urllib.error.HTTPError as e:
         raise PromError(f"{e.code} from {url}: {e.read()[:400].decode(errors='replace')}") from e
     except urllib.error.URLError as e:
-        raise PromError(f"cannot reach Prometheus at {PROM}: {e.reason}. Is the stack up? `docker compose ps`") from e
+        root, _ = stack_root()
+        raise PromError(
+            f"cannot reach Prometheus at {PROM}: {e.reason}\n"
+            f"  the stack is not running. start it with:\n"
+            f"    cd {root} && docker compose up -d\n"
+            f"  point elsewhere with RIG_PROMETHEUS=http://host:port") from e
     if body.get("status") != "success":
         raise PromError(f"{body.get('errorType')}: {body.get('error')}")
     return body["data"]
@@ -360,6 +391,28 @@ def cmd_timeline(args) -> int:
     return 0
 
 
+def cmd_where(args) -> int:
+    root, how = stack_root()
+    compose = (root / "docker-compose.yml").is_file()
+    info = {"root": str(root), "resolved_by": how, "prometheus": PROM,
+            "grafana": "http://localhost:13337", "compose_file": compose}
+    if args.json:
+        print(json.dumps(info, indent=2))
+        return 0
+    if args.quiet:
+        print(root)
+        return 0
+    print(f"stack root   {root}")
+    print(f"resolved by  {how}")
+    print(f"prometheus   {PROM}")
+    print(f"grafana      http://localhost:13337")
+    if not compose:
+        print("\nNo docker-compose.yml there. Clone the stack and set RIG_TELEMETRY_HOME:")
+        print("  git clone https://github.com/api-haus/rig-telemetry")
+        return 1
+    return 0
+
+
 # --------------------------------------------------------------------------
 # rig containers — per compose stack, or per container
 # --------------------------------------------------------------------------
@@ -650,11 +703,16 @@ def cmd_metrics(args) -> int:
 # --------------------------------------------------------------------------
 
 def main() -> int:
-    p = argparse.ArgumentParser(prog="rig", description=__doc__,
+    # Carried by the top-level parser and by every subparser, so both
+    # `rig --json why` and `rig why --json` work. Only one position working is
+    # a trap for anything driving this from a script.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--json", action="store_true", help="machine-readable output")
+    common.add_argument("--at", metavar="RFC3339", help="evaluate at a past instant, e.g. 2026-08-14T03:00:00Z")
+
+    p = argparse.ArgumentParser(prog="rig", description=__doc__, parents=[common],
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--json", action="store_true", help="machine-readable output")
-    p.add_argument("--at", metavar="RFC3339", help="evaluate at a past instant, e.g. 2026-08-14T03:00:00Z")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", required=True, parser_class=lambda **kw: argparse.ArgumentParser(parents=[common], **kw))
 
     s = sub.add_parser("why", help="one-shot verdict: what is wrong right now")
     s.set_defaults(fn=cmd_why)
@@ -675,6 +733,10 @@ def main() -> int:
     s.add_argument("--show", type=int, default=3, help="groups to print per bucket")
     s.add_argument("--min-load", type=float, default=0.0, help="hide quiet buckets below this load-per-core")
     s.set_defaults(fn=cmd_timeline)
+
+    s = sub.add_parser("where", help="where the stack is installed on this machine")
+    s.add_argument("--quiet", "-q", action="store_true", help="print the path alone")
+    s.set_defaults(fn=cmd_where)
 
     s = sub.add_parser("containers", help="docker resource use, per compose stack")
     s.add_argument("--each", action="store_true", help="one row per container instead of per stack")
@@ -712,7 +774,10 @@ def main() -> int:
     s.add_argument("pattern", nargs="?")
     s.set_defaults(fn=cmd_metrics)
 
+    pre, _ = common.parse_known_args()
     args = p.parse_args()
+    args.json = args.json or pre.json
+    args.at = args.at or pre.at
     try:
         return args.fn(args)
     except PromError as e:

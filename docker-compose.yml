@@ -18,8 +18,8 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=2y'
-      - '--storage.tsdb.retention.size=30GB'  # / has ~147 GB free at 85% used
+      - '--storage.tsdb.retention.time=${RETENTION_TIME:-2y}'
+      - '--storage.tsdb.retention.size=${RETENTION_SIZE:-30GB}'
       - '--web.enable-lifecycle'
       - '--web.enable-admin-api'
       - '--web.listen-address=127.0.0.1:13390'
@@ -105,10 +105,12 @@ services:
       - /dev/nvidiactl:/dev/nvidiactl
       - /dev/nvidia0:/dev/nvidia0
       - /dev/nvidia-uvm:/dev/nvidia-uvm
+    # NVIDIA_LIB_DIR is /usr/lib on Arch, /usr/lib/x86_64-linux-gnu on Debian
+    # and Ubuntu. Set it in .env — see docs/adapting.md.
     volumes:
       - /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro
-      - /usr/lib/libnvidia-ml.so:/usr/lib/libnvidia-ml.so:ro
-      - /usr/lib/libnvidia-ml.so.1:/usr/lib/libnvidia-ml.so.1:ro
+      - ${NVIDIA_LIB_DIR:-/usr/lib}/libnvidia-ml.so:/usr/lib/libnvidia-ml.so:ro
+      - ${NVIDIA_LIB_DIR:-/usr/lib}/libnvidia-ml.so.1:/usr/lib/libnvidia-ml.so.1:ro
     command:
       - '--web.listen-address=127.0.0.1:13330'
     labels:

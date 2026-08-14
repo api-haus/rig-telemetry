@@ -10,9 +10,9 @@
   "editable": true,
   "schemaVersion": 39,
   "version": 1,
-  "refresh": "1m",
+  "refresh": "30s",
   "time": {
-    "from": "now-30d",
+    "from": "now-6h",
     "to": "now"
   },
   "graphTooltip": 1,
@@ -610,7 +610,7 @@
     {
       "type": "timeseries",
       "title": "Cooling efficiency vs. one month ago",
-      "description": "1.0 = same cooling as a month ago. 1.15+ on the GPU or radiator line is dust: the same watts now need more degrees to move. The cold plate line separates dried paste from a dirty radiator. Empty until 37 days of history exist.",
+      "description": "1.0 = same cooling as a month ago. 1.15+ on the GPU or radiator line is dust: the same watts now need more degrees to move. The cold plate line separates dried paste from a dirty radiator. This panel always shows 90 days regardless of the dashboard range.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -684,7 +684,8 @@
             ]
           },
           "min": 0.8,
-          "max": 1.5
+          "max": 1.5,
+          "noValue": "No baseline yet \u2014 needs 37 days of history (7-day window vs. the same week 30 days earlier)."
         },
         "overrides": []
       },
@@ -703,6 +704,7 @@
           "sort": "desc"
         }
       },
+      "timeFrom": "90d",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -977,7 +979,7 @@
     {
       "type": "timeseries",
       "title": "GPU thermal resistance",
-      "description": "Degrees above case air per watt dissipated. A hardware property, so it is comparable across months. Only sampled above 60 W.",
+      "description": "Degrees above case air per watt dissipated. A hardware property, so it is comparable across months. Only sampled above 60 W, so an idle GPU leaves this empty. Always shows 30 days.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -1040,7 +1042,8 @@
             ]
           },
           "min": null,
-          "max": null
+          "max": null,
+          "noValue": "No sample yet \u2014 the GPU must draw at least 60 W for this to mean anything."
         },
         "overrides": []
       },
@@ -1059,6 +1062,7 @@
           "sort": "desc"
         }
       },
+      "timeFrom": "30d",
       "gridPos": {
         "h": 8,
         "w": 12,
