@@ -499,9 +499,13 @@ def cmd_alerts(args) -> int:
 
 
 def cmd_health(args) -> int:
-    targets = _call("query", {"query": "up"})["result"]
-    trows = [(s["metric"].get("job", "?"), "up" if float(s["value"][1]) else "DOWN") for s in targets]
-    trows.sort()
+    # The targets API reflects the live scrape config. The `up` metric also
+    # carries series for targets that have gone away but are not yet stale.
+    active = _call("targets", {"state": "any"}, method="GET")["activeTargets"]
+    trows = sorted((t["labels"].get("job", "?"),
+                    t["scrapeUrl"].split("//")[-1].split("/")[0],
+                    t["health"],
+                    (t.get("lastError") or "")[:60]) for t in active)
     with urllib.request.urlopen(f"{PROM}/api/v1/rules", timeout=TIMEOUT) as r:
         groups = json.load(r)["data"]["groups"]
     bad = [(rl["name"], rl.get("lastError", "")) for g in groups for rl in g["rules"]
@@ -516,7 +520,7 @@ def cmd_health(args) -> int:
                           "head_series": sser, "history_days": oldest}, indent=2))
         return 0
     print(rule("scrape targets"))
-    print(table(trows, ("job", "state")))
+    print(table(trows, ("job", "endpoint", "state", "error")))
     print()
     print(rule("rules"))
     print(f"  {sum(len(g['rules']) for g in groups)} rules, {len(bad)} failing, "
