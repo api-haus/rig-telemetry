@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# On PATH once the plugin is installed. Resolves symlinks so it works from the
-# repo, from the plugin cache, and from a link somebody drops in ~/.local/bin.
+# On PATH once the plugin is installed. Pure bash: no coreutils, so it survives
+# a stripped PATH. Resolves symlinks, so it works from the repo, from the
+# plugin cache, and from a link dropped in ~/.local/bin.
 set -euo pipefail
 self="${BASH_SOURCE[0]}"
 while [ -L "$self" ]; do
     target="$(readlink "$self")"
     case "$target" in
         /*) self="$target" ;;
-        *)  self="$(dirname "$self")/$target" ;;
+        *)  self="${self%/*}/$target" ;;
     esac
 done
-exec "$(cd "$(dirname "$self")/.." && pwd)/tools/rig" "$@"
+dir="${self%/*}"
+[ "$dir" = "$self" ] && dir="."
+exec "$dir/../tools/rig" "$@"
