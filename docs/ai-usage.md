@@ -256,6 +256,27 @@ It is a cache, not a record: every row is derived from a file that is still on
 disk, so it can be deleted at any time and rebuilt with `rig ai scan`. A schema
 change rebuilds it automatically.
 
+**Files are keyed relative to `$HOME`, not by absolute path.** The container
+reaches the same file at `/host/home/…` that the host reaches at `/home/you/…`.
+Keyed absolutely, each scanner read it as a file the other had never seen, and
+every harness with no per-record id was counted exactly twice. That doubling
+stays perfectly consistent, so it reads as real usage rather than as a fault —
+Claude Code and OpenCode were unaffected only because their records carry an id
+that is deduplicated.
+
+Reading a file's offset and appending the rows it produced are also one
+transaction (`BEGIN IMMEDIATE`), so two scanners running at once cannot both
+claim the same bytes.
+
+```
+rig ai doctor --verify
+```
+
+recounts every session file from scratch and checks the ledger against it. A
+ledger *behind* the files is normal — sessions append while it counts. A ledger
+*ahead* of them can only mean something was added twice, and it says so and
+exits 1. Run it after touching a reader.
+
 Scanning is incremental by byte offset. Measured here: 2,157 files and 6.7 GB
 of transcripts in 14.4 seconds on the first pass, and under 0.1 seconds after
 that.

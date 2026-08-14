@@ -41,6 +41,7 @@ was actually done, so it is the one that ranks projects, models and habits.
 | `rig ai models` | Per model, with the exact $/M rates used |
 | `rig ai limits` | Subscription windows, where a harness publishes them |
 | `rig ai doctor` | What is read, what is priced, what is missing |
+| `rig ai doctor --verify` | Recount every file and check the ledger against it |
 | `rig ai scan` | Read new session files now, without the container |
 | `rig ai backfill` | Put the ledger's history into Prometheus for Grafana |
 

@@ -76,6 +76,7 @@ Say which one you mean; never call the list figure a bill.
 rig ai                    # everything, split by harness, role, model, project
 rig ai daily --since 30d  # per day, reaches back further than Prometheus does
 rig ai doctor             # what is read, what is priced, what is missing
+rig ai doctor --verify    # recount the files, prove the ledger against them
 ```
 
 Answer "why is it expensive" from the role split, not the model. A running

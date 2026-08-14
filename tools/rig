@@ -884,6 +884,68 @@ def cmd_ai_scan(args) -> int:
     return 0
 
 
+def _ai_verify(hu, db) -> int:
+    """Recount straight from the files and compare with the ledger.
+
+    The ledger is an accumulator, and an accumulator's failure mode is adding
+    the same thing twice — which stays perfectly consistent and so reads as
+    real usage. This is the independent count that catches it.
+    """
+    print(rule("recounting every session file"))
+    # Scan first, so anything the ledger is missing is genuinely in flight
+    # rather than a reader that stopped an hour ago.
+    hu.scan(db, hu.Prices(hu.load_catalogue(refresh=False)))
+    seen: set[str] = set()
+    found: dict[str, list[int]] = {}
+    for cls in hu.SOURCES:
+        src = cls()
+        for path in src.files():
+            try:
+                gen = src.parse(path, 0, {})
+                while True:
+                    try:
+                        rec = next(gen)
+                    except StopIteration:
+                        break
+                    if rec.uid is not None:
+                        if f"{src.name}:{rec.uid}" in seen:
+                            continue
+                        seen.add(f"{src.name}:{rec.uid}")
+                    acc = found.setdefault(src.name, [0, 0])
+                    acc[0] += rec.requests
+                    acc[1] += sum(getattr(rec, r) for r in hu.BILLED_ROLES)
+            except (OSError, ValueError):
+                continue
+
+    # A ledger *behind* the files is the normal state: sessions append while
+    # this runs, and the recount finishes after the scan did. A ledger *ahead*
+    # of them can only mean something was added twice.
+    rows, ahead, behind = [], 0, 0
+    ledger = {r["harness"]: r for r in hu.totals(db, ("harness",))}
+    for harness in sorted(set(found) | set(ledger)):
+        want = found.get(harness, [0, 0])
+        have = ledger.get(harness)
+        got = [int(have["requests"]), int(sum(have[r] for r in hu.BILLED_ROLES))] if have else [0, 0]
+        drift = got[0] - want[0]
+        ahead += max(0, drift)
+        behind += max(0, -drift)
+        verdict = "ok" if drift == 0 else (
+            f"AHEAD by {drift:,} ({got[0] / max(want[0], 1):.2f}x)" if drift > 0
+            else f"{-drift:,} in flight")
+        rows.append((harness, f"{want[0]:,}", f"{got[0]:,}", toks(want[1]), toks(got[1]), verdict))
+    print(table(rows, ("harness", "in the files", "in the ledger", "tokens", "ledger tokens", "")))
+    if ahead:
+        print(f"\n  The ledger holds {ahead:,} responses the files do not. Something was")
+        print("  counted twice. Rebuild it:")
+        print(f"    rm {hu.ledger_path()}* && rig ai scan")
+        return 1
+    if behind:
+        print(f"\n  {behind:,} responses landed while this was counting. Nothing double counted.")
+    else:
+        print("\n  Every harness agrees to the token.")
+    return 0
+
+
 def cmd_ai_doctor(args) -> int:
     """Where every number came from, and what is missing."""
     import harness_usage as hu
@@ -940,6 +1002,12 @@ def cmd_ai_doctor(args) -> int:
         print(table([(r["harness"], r["model"], money(r["cost"]), money(r["reported_cost"]),
                       f"{r['cost'] / max(r['reported_cost'], 1e-9):.2f}x") for r in reported],
                     ("harness", "model", "list", "reported", "ratio")))
+
+    if args.verify:
+        print()
+        _, writable = _ledger(args, write=True)
+        if _ai_verify(hu, writable):
+            return 1
 
     stats = hu.HOME / ".claude" / "stats-cache.json"
     if stats.is_file():
@@ -1239,6 +1307,8 @@ def main() -> int:
     a.set_defaults(fn=cmd_ai_scan)
 
     a = ai.add_parser("doctor", help="what is read, what is priced, and what is missing")
+    a.add_argument("--verify", action="store_true",
+                   help="recount every session file and check the ledger against it")
     a.set_defaults(fn=cmd_ai_doctor)
 
     a = ai.add_parser("backfill", help="import ledger history into Prometheus")

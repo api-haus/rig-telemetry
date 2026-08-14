@@ -322,7 +322,7 @@ def ledger_path() -> pathlib.Path:
     return CACHE / "ai-usage.db"
 
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 
 def open_ledger(read_only: bool = False) -> sqlite3.Connection:
@@ -359,6 +359,22 @@ def _schema_of(db) -> str:
 def _uid(text: str) -> int:
     """A 63-bit key for a record that two files can both contain."""
     return int.from_bytes(hashlib.blake2b(text.encode(), digest_size=8).digest(), "big") >> 1
+
+
+def ledger_key(path: pathlib.Path) -> str:
+    """A file's identity in the ledger, independent of where HOME is mounted.
+
+    The exporter container reaches the same file at /host/home/... that the
+    host reaches at /home/you/..., and both write this one ledger. Keyed by the
+    absolute path, each would read the file as one the other had never seen,
+    and every harness with no per-record id to deduplicate on would be counted
+    exactly twice — a doubling that stays perfectly consistent, so it reads as
+    real usage rather than as a fault.
+    """
+    try:
+        return str(path.relative_to(HOME))
+    except ValueError:
+        return str(path)
 
 
 # --------------------------------------------------------------------------
@@ -1038,7 +1054,26 @@ def scan(db: sqlite3.Connection, prices: Prices, only: str = "") -> Scan:
 
 
 def _scan_file(db, prices, src: Source, path: pathlib.Path) -> int:
-    key = str(path)
+    """Read one file's new bytes into the ledger, as one atomic unit.
+
+    The exporter container and `rig ai scan` on the host share one ledger, so
+    reading a file's offset and appending the rows it produced have to be one
+    transaction: two scanners that both read offset N before either writes
+    would both add the same bytes. BEGIN IMMEDIATE takes the write lock up
+    front, so the second waits and then finds nothing new.
+    """
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        count = _scan_locked(db, prices, src, path)
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
+    db.execute("COMMIT")
+    return count
+
+
+def _scan_locked(db, prices, src: Source, path: pathlib.Path) -> int:
+    key = ledger_key(path)
     stat = path.stat()
     row = db.execute("SELECT size, mtime, offset, ctx FROM files WHERE path = ?", (key,)).fetchone()
     offset = int(row["offset"]) if row else 0
@@ -1088,7 +1123,6 @@ def _scan_file(db, prices, src: Source, path: pathlib.Path) -> int:
         """, (*k, key, *[int(v) for v in acc[:6]], acc[6]))
     db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?)",
                (key, stat.st_size, stat.st_mtime, int(offset), json.dumps(ctx)))
-    db.commit()
     return count
 
 
