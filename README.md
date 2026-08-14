@@ -60,8 +60,10 @@ to change the login.
 | nvidia_gpu_exporter | GPU utilisation, temperature, power, fan, clocks, VRAM, PCIe, throttle headroom |
 | smartctl-exporter | NVMe wear, media errors, unsafe shutdowns, per-drive temperature |
 | cAdvisor | Per-container CPU, memory and IO |
+| harness-exporter | Tokens and API-list dollars per AI coding harness, model, project and subagent |
 
-Scrape every 15s, 2 year retention capped at 30 GB.
+Scrape every 15s, 2 year retention capped at 30 GB. The harness exporter is
+scraped every 60s — spend moves in turns, not in seconds.
 
 ## Dashboards
 
@@ -71,10 +73,11 @@ Scrape every 15s, 2 year retention capped at 30 GB.
 | **Rig — Who** | Every resource attributed to a named process group |
 | **Rig — Thermals** | Temperatures, and cooling efficiency against a month-old baseline |
 | **Rig — Storage** | Throughput, queue latency, capacity, drive endurance |
+| **Rig — AI Spend** | What every coding harness used, at API list prices |
 
 They are generated, not hand-edited: `tools/gen-dashboards.py`.
 
-## The two things this does that a stock stack does not
+## The three things this does that a stock stack does not
 
 **It attributes load to a name.** `rig:proc:blocked` splits the load average by
 process group, so a load of 500 resolves to `build:rust-link 598` instead of a
@@ -89,10 +92,40 @@ month earlier. A 15% rise is dust, not weather and not workload.
 `rig thermals` prints the comparison; `docs/thermals.md` explains the method
 and where it can lie. It needs 37 days of history before it says anything.
 
+**It knows what the AI cost.** A subscription hides the price of a request, so
+you cannot tell a two-cent turn from a three-dollar one. This reads the session
+files eleven coding harnesses already write — Claude Code, Codex, Kimi Code,
+OpenCode, pi, Qwen Code, Gemini CLI, Goose, Crush, Copilot CLI, droid — and
+prices the tokens at the rates the providers publish for the same models on
+their APIs.
+
+```
+$ rig ai
+-- total -----------------------------------------------------------------
+  $29,218.07 across 175,523 API responses and 46.04B billable tokens
+
+-- where the money goes --------------------------------------------------
+  role         list value  tokens   share
+  cache_read   $22,165.89  45.11B   76%
+  cache_write  $4,538.53   742.36M  16%
+  output       $2,283.20   94.37M   8%
+  input        $230.44     87.80M   1%
+```
+
+That is API list value — the work a subscription covered, not money that left
+the account. It is the only figure that varies with what you did, so it is the
+one that ranks projects, models and habits. The role split is the finding: a
+running context is re-sent on every request, so three quarters of the cost of
+an agent session is re-reading, not writing.
+
+Per project, per model, per day, and split between your own turns and the
+subagents you sent out. `docs/ai-usage.md` explains the conventions, the price
+lookup, and why this reports about half of what Claude Code's own statistics do.
+
 ## Claude Code plugin
 
 This repo is also a Claude Code plugin. Installing it puts `rig` on PATH and
-adds three skills, so an agent can answer "why is this machine slow" without
+adds four skills, so an agent can answer "why is this machine slow" without
 being told how.
 
 ```
@@ -105,6 +138,7 @@ being told how.
 | `rig-diagnose` | machine slow, loaded, thrashing, "what is using my CPU", "what happened last night" |
 | `rig-devenv` | a project's containers, brokers, watchers or toolchains are loading the machine |
 | `rig-thermals` | heat, fans, throttling, "does my PC need cleaning" |
+| `rig-aicost` | AI spend, token burn, "what did this project cost", cache reads, subscription windows |
 
 The plugin ships the whole stack, so the installed copy can run it directly.
 `rig where` resolves the root on any machine — it prefers the checkout a
@@ -133,14 +167,16 @@ sudo tools/install-systemd.sh
 ```
 docker-compose.yml            the stack
 prometheus/prometheus.yml     scrape config and retention
-prometheus/rules/             recording rules and alerts, in four layers
+prometheus/rules/             recording rules and alerts, in five layers
 process-exporter/config.yml   process group definitions
 grafana/                      datasource, dashboard provider, generated dashboards
 tools/rig                     the CLI
 tools/gen-dashboards.py       dashboard generator
+tools/harness_usage.py        one reader per AI harness, and the price lookup
+tools/harness-exporter.py     serves that to Prometheus
 bin/rig                       PATH shim, added automatically by the plugin
 .claude-plugin/               plugin and marketplace manifests
-skills/                       rig-diagnose, rig-devenv, rig-thermals
+skills/                       rig-diagnose, rig-devenv, rig-thermals, rig-aicost
 docs/                         metrics, thermal method, runbook, adapting
 ```
 
@@ -148,6 +184,7 @@ docs/                         metrics, thermal method, runbook, adapting
 
 - [AGENTS.md](AGENTS.md) — the query contract and diagnosis procedure
 - [docs/metrics.md](docs/metrics.md) — every series, explained
+- [docs/ai-usage.md](docs/ai-usage.md) — harness readers, token conventions, pricing
 - [docs/thermals.md](docs/thermals.md) — how the dust detection works
 - [docs/runbook.md](docs/runbook.md) — operations, upgrades, retention, backup
 - [docs/adapting.md](docs/adapting.md) — running this on different hardware

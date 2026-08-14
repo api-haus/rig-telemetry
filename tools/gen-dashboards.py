@@ -148,6 +148,22 @@ def table(L, title, queries, *, w=12, h=9, desc="", unit="short", sort_desc=True
     }, w, h)
 
 
+def bars(L, title, expr, legend, *, unit="short", w=8, h=9, desc="", decimals=None):
+    """A ranked list. Reads better than a pie for "who spent the most"."""
+    return L.place({
+        "type": "bargauge", "title": title, "description": desc, "datasource": DS,
+        "targets": [dict(t, instant=True) for t in targets([(expr, legend)])],
+        "fieldConfig": {"defaults": {
+            "unit": unit, "decimals": decimals,
+            "color": {"mode": "continuous-BlPu"},
+            "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": None}]},
+        }, "overrides": []},
+        "options": {"displayMode": "gradient", "orientation": "horizontal",
+                    "showUnfilled": True, "valueMode": "color",
+                    "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False}},
+    }, w, h)
+
+
 def dashboard(uid, title, description, L, *, refresh="15s", time_from="now-3h", tags=()):
     return {
         "uid": uid, "title": title, "description": description,
@@ -402,12 +418,122 @@ def storage():
 
 
 # --------------------------------------------------------------------------
+# 5. AI — what the coding harnesses spent, at API list prices
+# --------------------------------------------------------------------------
+
+LIST_PRICE = ("Every dollar here is API list value: what these tokens would cost billed through "
+              "the provider's API. A subscription pays a flat fee instead, so this is the value "
+              "received rather than money leaving the account.")
+
+
+def ai():
+    L = Layout()
+    L.row("API list value")
+    stat(L, "All recorded", "rig:ai:cost_usd", unit="currencyUSD", w=4, decimals=0,
+         desc=LIST_PRICE + " Counts every session file still on disk.")
+    stat(L, "Last 24h", "rig:ai:cost_usd:today", unit="currencyUSD", w=3, decimals=0,
+         thresholds=steps(("yellow", 50), ("orange", 200), ("red", 500)))
+    stat(L, "Last 7 days", "rig:ai:cost_usd:week", unit="currencyUSD", w=3, decimals=0)
+    stat(L, "Burn rate", "rig:ai:burn_usd_per_hour", unit="currencyUSD", w=3, decimals=1,
+         desc="Dollars of list value per hour, averaged over the last hour.",
+         thresholds=steps(("yellow", 10), ("orange", 40), ("red", 100)))
+    stat(L, "Per million tokens", "rig:ai:usd_per_million_tokens", unit="currencyUSD", w=3,
+         decimals=2, desc="Blended over every role. Rises when caches lapse and windows get rewritten.")
+    stat(L, "Context re-read", "rig:ai:cache_read_share", unit="percentunit", w=3,
+         desc="Share of input-side tokens that are cache reads — the window being re-sent.",
+         thresholds=steps(("yellow", 0.9), ("orange", 0.97)))
+    stat(L, "Live sessions", "sum(rig:ai:sessions_live)", unit="none", w=2,
+         desc="Harness sessions whose state file moved in the last few minutes.")
+    stat(L, "Harnesses seen", "rig:ai:harnesses_reporting", unit="none", w=3, graph=False,
+         desc="Harnesses with session files on this machine. `rig ai doctor` lists all of them.")
+
+    L.row("Where the money goes")
+    ts(L, "Spend by token role", [
+        (f'sum by (role) (increase(aiusage_cost_usd_total[$__rate_interval]))', "{{role}}"),
+    ], unit="currencyUSD", stack=True, w=12,
+       desc=("cache_read is normally the largest by far: a running context is re-sent on every "
+             "request, so cost is context size times request count. cache_write spikes when a "
+             "prompt cache lapses and the whole window is paid for again."))
+    ts(L, "Spend by harness", [
+        ("sum by (harness) (increase(aiusage_cost_usd_total[$__rate_interval]))", "{{harness}}"),
+    ], unit="currencyUSD", stack=True, w=12)
+    bars(L, "Total by project", "topk(15, rig:ai:cost_usd:by_project)", "{{project}}",
+         unit="currencyUSD", w=8, decimals=0,
+         desc="Cumulative list value per project directory, all recorded history.")
+    bars(L, "Total by model", "topk(12, rig:ai:cost_usd:by_model)", "{{model}}",
+         unit="currencyUSD", w=8, decimals=0)
+    bars(L, "Total by role", "rig:ai:cost_usd:by_role", "{{role}}",
+         unit="currencyUSD", w=8, decimals=0)
+
+    L.row("Who did the work")
+    ts(L, "Delegated versus direct", [
+        ("sum by (kind) (increase(aiusage_cost_usd_total[$__rate_interval]))", "{{kind}}"),
+    ], unit="currencyUSD", stack=True, w=12,
+       desc="Send enough work to subagents and most of the money stops being spent by the session "
+            "you are watching.")
+    ts(L, "Spend by project", [
+        ("topk(8, sum by (project) (increase(aiusage_project_cost_usd_total[$__rate_interval])))",
+         "{{project}}"),
+    ], unit="currencyUSD", stack=True, w=12)
+    table(L, "Model detail", [("rig:ai:cost_usd:by_model", "")], w=12, unit="currencyUSD",
+          rename={"Value": "list value"},
+          desc="Rates come from models.dev. `rig ai models` prints the per-million figures used.")
+    table(L, "Harnesses on this machine", [("aiusage_source_files", "")], w=12, unit="none",
+          rename={"Value": "session files"},
+          desc="Zero files means the harness is installed but has written nothing this reader "
+               "understands. `rig ai doctor` says which.")
+
+    L.row("Tokens")
+    ts(L, "Tokens per second by role", [("rig:ai:tokens_per_sec", "{{harness}} {{role}}")],
+       unit="none", stack=True, w=12,
+       desc="reasoning is already inside output and is never priced twice.")
+    ts(L, "API responses per hour", [("rig:ai:requests_per_hour", "{{harness}}")],
+       unit="none", stack=True, w=12)
+    ts(L, "Context re-read share", [("rig:ai:cache_read_share", "cache reads / input-side tokens")],
+       unit="percentunit", max_=1, w=12,
+       desc="Climbs through a long session. The window grows and every request pays for all of it.")
+    ts(L, "Dollars per million tokens", [("rig:ai:usd_per_million_tokens", "blended")],
+       unit="currencyUSD", w=12,
+       desc="A step up means either a dearer model or a cache rebuild.")
+
+    L.row("Subscription and coverage")
+    ts(L, "Subscription window used", [("rig:ai:limit_used_ratio", "{{harness}} {{window}} ({{plan}})")],
+       unit="percentunit", max_=1, w=12,
+       no_value="No harness here publishes its subscription window. Codex is the one that does.",
+       desc="Read straight from the harness. It is the only figure on this dashboard that is about "
+            "the plan rather than about list price.")
+    ts(L, "List price against what the harness claims", [
+        ("rig:ai:reported_cost_usd", "harness reported"),
+        ("sum(aiusage_cost_usd_total)", "API list value"),
+    ], unit="currencyUSD", w=12,
+       desc="Only some harnesses report a cost at all, so the reported line covers part of the "
+            "total. Where both exist the gap is the subsidy.")
+    stat(L, "Tokens with no published price", "rig:ai:unpriced_tokens", unit="none", w=6,
+         desc="Excluded from every dollar figure here. A model nobody sells by the token gets no "
+              "invented number.",
+         thresholds=steps(("yellow", 1)))
+    stat(L, "Ledger age", "rig:ai:scan_age_seconds", unit="s", w=6,
+         desc="Since the exporter last read the session files.",
+         thresholds=steps(("yellow", 300), ("orange", 900)))
+    stat(L, "Price catalogue age", "aiusage_prices_age_seconds", unit="s", w=6,
+         desc="models.dev is refetched by the exporter on its own schedule.",
+         thresholds=steps(("yellow", 7 * 86400), ("orange", 30 * 86400)))
+    stat(L, "Files tracked", "sum(aiusage_source_files)", unit="none", w=6, graph=False)
+
+    return dashboard("rig-ai", "Rig — AI Spend",
+                     "What every AI coding harness on this machine used, priced at published API "
+                     "list rates. Money, tokens, models, projects, and the delegated share.",
+                     L, time_from="now-7d", refresh="1m", tags=["ai", "cost"])
+
+
+# --------------------------------------------------------------------------
 
 BOARDS = {
     "rig-overview.json": overview,
     "rig-who.json": who,
     "rig-thermals.json": thermals,
     "rig-storage.json": storage,
+    "rig-ai.json": ai,
 }
 
 

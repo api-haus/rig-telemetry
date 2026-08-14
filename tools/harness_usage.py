@@ -1,0 +1,1098 @@
+#!/usr/bin/env python3
+"""Read AI coding harness usage from the files each harness writes to disk.
+
+Every harness records what it sent and what came back. The formats differ, the
+token conventions differ, and only some of them say what it cost. This module
+reads all of them, converts to one exclusive-token convention, prices the
+tokens at published API list rates, and keeps the result in a SQLite ledger.
+
+Two consumers: `tools/harness-exporter.py` serves the ledger to Prometheus,
+`rig ai` reads it for history that predates the exporter. Standard library
+only, like the rest of this stack.
+
+Read docs/ai-usage.md for the conventions and the honest gaps.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import pathlib
+import sqlite3
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+HOME = pathlib.Path(os.environ.get("RIG_AI_HOME") or pathlib.Path.home())
+CACHE = pathlib.Path(os.environ.get("RIG_AI_CACHE") or
+                     (pathlib.Path.home() / ".cache" / "rig-telemetry"))
+CATALOGUE_URL = "https://models.dev/api.json"
+CATALOGUE_MAX_AGE = float(os.environ.get("RIG_AI_PRICES_MAX_AGE_DAYS", "7")) * 86400
+
+# A model id is carried by dozens of gateways and the first match is not the
+# number "what would this cost on the API" asks for. First party wins.
+FIRST_PARTY = ("anthropic", "openai", "moonshotai", "moonshotai-cn", "google",
+               "alibaba", "deepseek", "xai", "mistral", "meta", "zai", "minimax")
+
+TOKEN_ROLES = ("input", "output", "cache_read", "cache_write", "reasoning")
+
+
+# --------------------------------------------------------------------------
+# records
+# --------------------------------------------------------------------------
+
+@dataclass
+class Rec:
+    """One API response, in the exclusive convention.
+
+    `input` never includes cached tokens; `reasoning` is always already inside
+    `output`, so it is reported but never priced.
+    """
+    ts: float
+    harness: str
+    model: str
+    project: str
+    kind: str = "main"
+    provider: str = ""
+    input: int = 0
+    output: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
+    reasoning: int = 0
+    requests: int = 1
+    reported_cost: float | None = None
+    uid: str | None = None          # set when the record can appear twice
+
+    def day(self) -> str:
+        """The local day. "What did I spend yesterday" means the one you lived."""
+        return datetime.fromtimestamp(self.ts).strftime("%Y-%m-%d")
+
+
+@dataclass
+class Scan:
+    """What one pass over the disk found."""
+    records: int = 0
+    files: dict[str, int] = field(default_factory=dict)
+    errors: int = 0
+    problems: list[str] = field(default_factory=list)
+    gauges: list[tuple[str, dict[str, str], float]] = field(default_factory=list)
+    seconds: float = 0.0
+
+    def failed(self, what: str, why: BaseException):
+        self.errors += 1
+        if len(self.problems) < 10:
+            self.problems.append(f"{what}: {type(why).__name__} {why}")
+
+
+# --------------------------------------------------------------------------
+# prices
+# --------------------------------------------------------------------------
+
+class Prices:
+    """models.dev list rates, in dollars per million tokens.
+
+    Nothing is guessed. A model with no published price is priced at zero and
+    counted as unpriced, so the gap is visible instead of silently folded into
+    a total that looks complete.
+    """
+
+    def __init__(self, catalogue: dict | None = None):
+        self.catalogue = catalogue if catalogue is not None else load_catalogue()
+        self._cache: dict[tuple[str, str], dict | None] = {}
+        self.unpriced: set[tuple[str, str]] = set()
+
+    def lookup(self, provider: str, model: str) -> dict | None:
+        key = (provider, model)
+        if key not in self._cache:
+            self._cache[key] = self._resolve(provider, model)
+            if self._cache[key] is None:
+                self.unpriced.add(key)
+        return self._cache[key]
+
+    def _resolve(self, provider: str, model: str) -> dict | None:
+        if not model or not self.catalogue:
+            return None
+        for name in self._variants(model):
+            hit = self._in_provider(provider, name) if provider else None
+            if hit:
+                return hit
+            hit = self._anywhere(name)
+            if hit:
+                return hit
+        return None
+
+    @staticmethod
+    def _variants(model: str):
+        """The names a harness uses for one model, cheapest guess first."""
+        seen, out = set(), []
+        base = model.split("/")[-1]
+        for name in (model, base, base.rsplit("-", 1)[0], "kimi-" + base,
+                     base.replace("_", "-"), base.removesuffix("-latest")):
+            if name and name not in seen:
+                seen.add(name)
+                out.append(name)
+        return out
+
+    def _in_provider(self, provider: str, model: str) -> dict | None:
+        entry = (self.catalogue.get(provider) or {}).get("models", {}).get(model)
+        cost = (entry or {}).get("cost") or {}
+        return self._rates(cost, provider, model) if cost.get("input") else None
+
+    def _anywhere(self, model: str) -> dict | None:
+        hits = [(p, (v.get("models") or {})[model]) for p, v in self.catalogue.items()
+                if model in (v.get("models") or {})]
+        if not hits:
+            return None
+        for want in FIRST_PARTY:
+            for p, entry in hits:
+                if p == want and (entry.get("cost") or {}).get("input"):
+                    return self._rates(entry["cost"], p, model)
+        for p, entry in hits:
+            # A subscription gateway lists $0, which answers a different question.
+            if (entry.get("cost") or {}).get("input"):
+                return self._rates(entry["cost"], p, model)
+        return None
+
+    @staticmethod
+    def _rates(cost: dict, provider: str, model: str) -> dict:
+        inp = float(cost.get("input") or 0)
+        return {
+            "input": inp,
+            "output": float(cost.get("output") or 0),
+            # A cache rate nobody publishes is not a reason to stay silent —
+            # the plain input rate is the honest floor.
+            "cache_read": float(cost["cache_read"]) if cost.get("cache_read") is not None else inp,
+            "cache_write": float(cost["cache_write"]) if cost.get("cache_write") is not None else inp,
+            "source": f"{provider}/{model}",
+        }
+
+    def provider_of(self, provider: str, model: str) -> str:
+        rates = self.lookup(provider, model)
+        if rates:
+            return rates["source"].split("/")[0]
+        return provider or "unknown"
+
+
+def catalogue_path() -> pathlib.Path:
+    return CACHE / "models.dev.json"
+
+
+_CATALOGUE: tuple[float, dict] = (0.0, {})
+
+
+def load_catalogue(refresh: bool = True) -> dict:
+    """The price catalogue, refetched when older than RIG_AI_PRICES_MAX_AGE_DAYS.
+
+    A failed fetch keeps the last good copy. No copy and no network means no
+    money figures, which `rig ai doctor` reports rather than papering over.
+    Parsed once per process — the file is several megabytes and every view of
+    the ledger needs it.
+    """
+    global _CATALOGUE
+    path = catalogue_path()
+    fresh = path.is_file() and (time.time() - path.stat().st_mtime) < CATALOGUE_MAX_AGE
+    if refresh and not fresh:
+        try:
+            fetch_catalogue()
+        except (OSError, urllib.error.URLError, ValueError):
+            pass
+    if not path.is_file():
+        return {}
+    stamp = path.stat().st_mtime
+    if _CATALOGUE[0] != stamp:
+        try:
+            _CATALOGUE = (stamp, json.loads(path.read_text()))
+        except (OSError, ValueError):
+            return {}
+    return _CATALOGUE[1]
+
+
+def fetch_catalogue() -> int:
+    """Download the catalogue. Returns the provider count."""
+    # models.dev answers 403 to the default urllib agent.
+    req = urllib.request.Request(CATALOGUE_URL, headers={"User-Agent": "rig-telemetry"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        body = r.read()
+    data = json.loads(body)
+    if not isinstance(data, dict) or not data:
+        raise ValueError("models.dev returned no providers")
+    CACHE.mkdir(parents=True, exist_ok=True)
+    tmp = catalogue_path().with_suffix(".tmp")
+    tmp.write_bytes(body)
+    tmp.replace(catalogue_path())
+    return len(data)
+
+
+# --------------------------------------------------------------------------
+# ledger
+# --------------------------------------------------------------------------
+
+# Tokens are stored, money is not. A price catalogue that arrives late, or a
+# rate that changes, then applies to everything already recorded instead of
+# only to what is scanned afterwards.
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS usage (
+  day TEXT, harness TEXT, provider TEXT, model TEXT, project TEXT, kind TEXT,
+  path TEXT,
+  input INTEGER DEFAULT 0, output INTEGER DEFAULT 0,
+  cache_read INTEGER DEFAULT 0, cache_write INTEGER DEFAULT 0,
+  reasoning INTEGER DEFAULT 0, requests INTEGER DEFAULT 0,
+  reported_cost REAL DEFAULT 0,
+  PRIMARY KEY (day, harness, provider, model, project, kind, path)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS usage_day ON usage(day);
+CREATE INDEX IF NOT EXISTS usage_path ON usage(path);
+CREATE TABLE IF NOT EXISTS files (
+  path TEXT PRIMARY KEY, size INTEGER, mtime REAL, offset INTEGER, ctx TEXT
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS seen (uid INTEGER PRIMARY KEY) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID;
+"""
+
+
+def ledger_path() -> pathlib.Path:
+    return CACHE / "ai-usage.db"
+
+
+SCHEMA_VERSION = "2"
+
+
+def open_ledger(read_only: bool = False) -> sqlite3.Connection:
+    CACHE.mkdir(parents=True, exist_ok=True)
+    path = ledger_path()
+    if read_only:
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+        db.row_factory = sqlite3.Row
+        return db
+    db = sqlite3.connect(path, timeout=60, isolation_level=None)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA synchronous=NORMAL")
+    # The ledger is derived from files that are all still there, so a shape
+    # change rebuilds rather than migrates. It costs one full rescan.
+    if _schema_of(db) != SCHEMA_VERSION:
+        for table in ("usage", "files", "seen", "meta"):
+            db.execute(f"DROP TABLE IF EXISTS {table}")
+    db.executescript(SCHEMA)
+    db.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)", (SCHEMA_VERSION,))
+    return db
+
+
+def _schema_of(db) -> str:
+    try:
+        row = db.execute("SELECT v FROM meta WHERE k = 'schema'").fetchone()
+    except sqlite3.Error:
+        return ""
+    return row["v"] if row else ""
+
+
+def _uid(text: str) -> int:
+    """A 63-bit key for a record that two files can both contain."""
+    return int.from_bytes(hashlib.blake2b(text.encode(), digest_size=8).digest(), "big") >> 1
+
+
+# --------------------------------------------------------------------------
+# sources
+# --------------------------------------------------------------------------
+
+class Source:
+    """One harness. Subclasses yield Rec from the files they own.
+
+    `parse` receives a byte offset and returns the offset it stopped at, so a
+    growing log is read once. `rescan` sources are small summary files that are
+    rewritten rather than appended to, and are re-read whole every pass.
+    """
+    name = "?"
+    home_hint = ""
+    rescan = False
+
+    def files(self) -> list[pathlib.Path]:
+        return []
+
+    def parse(self, path: pathlib.Path, offset: int, ctx: dict):
+        raise NotImplementedError
+
+    def gauges(self) -> list[tuple[str, dict[str, str], float]]:
+        return []
+
+    def installed(self) -> bool:
+        return bool(self.home_hint) and (HOME / self.home_hint).exists()
+
+    # -- helpers shared by the line-oriented sources
+
+    @staticmethod
+    def _lines(path: pathlib.Path, offset: int, needle: str):
+        """Yield (json, new_offset) for lines past `offset` that hold `needle`.
+
+        A partial trailing line is left unread; the next pass starts at it.
+        """
+        with path.open("rb") as fh:
+            if offset:
+                fh.seek(offset)
+            pos = offset
+            for raw in fh:
+                if not raw.endswith(b"\n"):
+                    break
+                pos += len(raw)
+                if needle and needle.encode() not in raw:
+                    continue
+                try:
+                    yield json.loads(raw), pos
+                except (ValueError, UnicodeDecodeError):
+                    continue
+            yield None, pos
+
+    @staticmethod
+    def _iso(text: str | None) -> float:
+        if not text:
+            return time.time()
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return time.time()
+
+    @staticmethod
+    def _project(cwd: str | None) -> str:
+        if not cwd:
+            return "unknown"
+        return pathlib.PurePath(cwd).name or "unknown"
+
+
+class ClaudeCode(Source):
+    """~/.claude/projects/<slug>/<session>.jsonl, one line per API response.
+
+    Anthropic splits cache reads and writes out of `input_tokens`, so the
+    counts are already exclusive. Subagents write beside their parent under
+    `subagents/`, and a forked session copies the messages it inherited — hence
+    the message id is deduplicated.
+    """
+    name = "claude-code"
+    home_hint = ".claude"
+
+    def files(self):
+        return sorted((HOME / ".claude" / "projects").glob("**/*.jsonl"))
+
+    def parse(self, path, offset, ctx):
+        sub = "subagents" in path.parts
+        for obj, pos in self._lines(path, offset, '"usage"'):
+            if obj is None:
+                return pos
+            msg = obj.get("message")
+            if not isinstance(msg, dict):
+                continue
+            u = msg.get("usage")
+            model = msg.get("model") or ""
+            if not isinstance(u, dict) or not model or model.startswith("<"):
+                continue
+            cc = u.get("cache_creation") or {}
+            yield Rec(
+                ts=self._iso(obj.get("timestamp")),
+                harness=self.name,
+                model=model,
+                project=self._project(obj.get("cwd")),
+                kind="subagent" if sub or obj.get("isSidechain") else "main",
+                input=int(u.get("input_tokens") or 0),
+                output=int(u.get("output_tokens") or 0),
+                cache_read=int(u.get("cache_read_input_tokens") or 0),
+                cache_write=int(u.get("cache_creation_input_tokens")
+                               or (cc.get("ephemeral_1h_input_tokens", 0)
+                                   + cc.get("ephemeral_5m_input_tokens", 0))),
+                reasoning=int((u.get("output_tokens_details") or {}).get("thinking_tokens") or 0),
+                uid=f"{msg.get('id')}:{obj.get('requestId')}",
+            )
+
+    def gauges(self):
+        return _live_sessions(self.name, (HOME / ".claude" / "sessions").glob("*.json"),
+                              lambda d: (d.get("cwd"), d.get("status")))
+
+
+class Codex(Source):
+    """~/.codex/sessions/**/rollout-*.jsonl, OpenAI convention.
+
+    `cached_input_tokens` is a subset of `input_tokens` and reasoning is a
+    subset of output, so both are subtracted out to reach the exclusive form.
+    The rollout also carries the plan's rate-limit windows, which no other
+    harness on this machine publishes.
+    """
+    name = "codex"
+    home_hint = ".codex"
+
+    def files(self):
+        return sorted((HOME / ".codex" / "sessions").glob("**/*.jsonl"))
+
+    def parse(self, path, offset, ctx):
+        for obj, pos in self._lines(path, offset, ""):
+            if obj is None:
+                return pos
+            payload = obj.get("payload") or {}
+            # The rollout tags session and turn records on the envelope but
+            # every event_msg on the payload, so both have to be consulted.
+            kind = obj.get("type") if obj.get("type") != "event_msg" else payload.get("type")
+            if kind == "session_meta":
+                ctx["provider"] = payload.get("model_provider") or ""
+                ctx["cwd"] = payload.get("cwd") or ctx.get("cwd")
+            elif kind == "turn_context":
+                ctx["model"] = payload.get("model") or ctx.get("model")
+                ctx["cwd"] = payload.get("cwd") or ctx.get("cwd")
+            elif kind == "token_count":
+                rec = self._usage(obj, payload, ctx)
+                if rec:
+                    yield rec
+
+    def _usage(self, obj, payload, ctx) -> Rec | None:
+        info = payload.get("info") or {}
+        last = info.get("last_token_usage")
+        if not last:
+            # Older rollouts only carry the running total. Difference it.
+            total = info.get("total_token_usage") or {}
+            prev = ctx.get("total") or {}
+            last = {k: int(total.get(k, 0)) - int(prev.get(k, 0)) for k in total}
+        ctx["total"] = info.get("total_token_usage") or ctx.get("total")
+        self._limits(payload, ctx)
+        cached = int(last.get("cached_input_tokens") or 0)
+        fresh = max(0, int(last.get("input_tokens") or 0) - cached)
+        out = int(last.get("output_tokens") or 0)
+        if not (fresh or cached or out):
+            return None
+        return Rec(
+            ts=self._iso(obj.get("timestamp")),
+            harness=self.name,
+            model=ctx.get("model") or "",
+            project=self._project(ctx.get("cwd")),
+            provider=ctx.get("provider") or "",
+            input=fresh,
+            output=out,
+            cache_read=cached,
+            reasoning=int(last.get("reasoning_output_tokens") or 0),
+        )
+
+    def _limits(self, payload, ctx):
+        limits = payload.get("rate_limits")
+        if not limits:
+            return
+        ctx["limits"] = {
+            "plan": limits.get("plan_type") or "unknown",
+            "windows": [(w, limits.get(w, {}) or {}) for w in ("primary", "secondary")],
+        }
+
+    def gauges(self):
+        """The newest rollout that carries a rate-limit block wins."""
+        out = []
+        newest = None
+        for path in sorted(self.files(), key=lambda p: p.stat().st_mtime, reverse=True)[:4]:
+            for obj, _ in self._lines(path, 0, '"rate_limits"'):
+                if obj is None:
+                    break
+                limits = (obj.get("payload") or {}).get("rate_limits")
+                if limits:
+                    newest = (self._iso(obj.get("timestamp")), limits)
+            if newest:
+                break
+        if not newest:
+            return out
+        when, limits = newest
+        for key, label in (("primary", "session"), ("secondary", "weekly")):
+            w = limits.get(key) or {}
+            if w.get("used_percent") is None:
+                continue
+            tags = {"harness": self.name, "window": label,
+                    "plan": str(limits.get("plan_type") or "unknown")}
+            out.append(("aiusage_rate_limit_used_ratio", tags, float(w["used_percent"]) / 100))
+            if w.get("resets_at"):
+                out.append(("aiusage_rate_limit_reset_timestamp_seconds", tags, float(w["resets_at"])))
+        out.append(("aiusage_rate_limit_seen_timestamp_seconds", {"harness": self.name}, when))
+        return out
+
+
+class KimiCode(Source):
+    """~/.kimi-code/sessions/<wd>/<session>/agents/<agent>/wire.jsonl.
+
+    One `usage.record` per API response, already exclusive. Each subagent gets
+    its own wire and the main one carries none of those rows, so the sibling
+    directories are read too.
+    """
+    name = "kimi-code"
+    home_hint = ".kimi-code"
+
+    def files(self):
+        return sorted((HOME / ".kimi-code" / "sessions").glob("*/*/agents/*/wire.jsonl"))
+
+    def parse(self, path, offset, ctx):
+        if "cwd" not in ctx:
+            ctx["cwd"] = self._cwd(path)
+        agent = path.parent.name
+        for obj, pos in self._lines(path, offset, '"usage.record"'):
+            if obj is None:
+                return pos
+            if obj.get("type") != "usage.record":
+                continue
+            u = obj.get("usage") or {}
+            yield Rec(
+                ts=float(obj.get("time", 0)) / 1000 or time.time(),
+                harness=self.name,
+                model=obj.get("model") or "",
+                project=self._project(ctx.get("cwd")),
+                kind="main" if agent == "main" else "subagent",
+                input=int(u.get("inputOther") or 0),
+                output=int(u.get("output") or 0),
+                cache_read=int(u.get("inputCacheRead") or 0),
+                cache_write=int(u.get("inputCacheCreation") or 0),
+            )
+
+    @staticmethod
+    def _cwd(path: pathlib.Path) -> str:
+        state = path.parent.parent.parent / "state.json"
+        try:
+            cwd = json.loads(state.read_text()).get("cwd")
+            if cwd:
+                return cwd
+        except (OSError, ValueError):
+            pass
+        # A session with no state file still names its working directory in
+        # the `wd_<name>_<hash>` directory it lives in.
+        stem = path.parent.parent.parent.parent.name
+        return stem[3:].rsplit("_", 1)[0] if stem.startswith("wd_") else ""
+
+    def gauges(self):
+        return _live_sessions(self.name, (HOME / ".kimi-code" / "sessions").glob("*/*/state.json"),
+                              lambda d: (d.get("cwd"), d.get("lastTurnReason") or "idle"),
+                              max_age=3600)
+
+
+class OpenCode(Source):
+    """OpenCode keeps assistant messages twice: JSON files, then SQLite.
+
+    Both are read and the message id deduplicates the overlap. It is one of
+    three harnesses here that record what they think a turn cost, which is kept
+    beside the recomputed figure rather than instead of it.
+    """
+    name = "opencode"
+    home_hint = ".local/share/opencode"
+
+    def files(self):
+        root = HOME / ".local" / "share" / "opencode"
+        out = sorted((root / "storage" / "message").glob("*/*.json"))
+        db = root / "opencode.db"
+        if db.is_file():
+            out.append(db)
+        return out
+
+    def parse(self, path, offset, ctx):
+        if path.suffix == ".db":
+            return self._from_db(path, offset)
+        return self._from_file(path, offset)
+
+    def _from_file(self, path, offset):
+        try:
+            obj = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return path.stat().st_size
+        rec = self._rec(obj)
+        if rec:
+            yield rec
+        return path.stat().st_size
+
+    def _from_db(self, path, offset):
+        try:
+            db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=15)
+            rows = db.execute(
+                "SELECT id, time_created, data FROM message WHERE time_created > ? "
+                "ORDER BY time_created", (offset,)).fetchall()
+        except sqlite3.Error:
+            return offset
+        newest = offset
+        for mid, created, data in rows:
+            newest = max(newest, int(created or 0))
+            try:
+                obj = json.loads(data)
+            except ValueError:
+                continue
+            obj.setdefault("id", mid)
+            rec = self._rec(obj)
+            if rec:
+                yield rec
+        db.close()
+        return newest
+
+    def _rec(self, obj) -> Rec | None:
+        if obj.get("role") != "assistant":
+            return None
+        tok = obj.get("tokens") or {}
+        cache = tok.get("cache") or {}
+        total = sum(int(tok.get(k) or 0) for k in ("input", "output")) + \
+            sum(int(cache.get(k) or 0) for k in ("read", "write"))
+        if not total:
+            return None
+        return Rec(
+            ts=float((obj.get("time") or {}).get("created", 0)) / 1000 or time.time(),
+            harness=self.name,
+            model=obj.get("modelID") or "",
+            project=self._project((obj.get("path") or {}).get("root")),
+            kind="subagent" if obj.get("parentID") and obj.get("agent") not in (None, "build") else "main",
+            provider=obj.get("providerID") or "",
+            input=int(tok.get("input") or 0),
+            output=int(tok.get("output") or 0),
+            cache_read=int(cache.get("read") or 0),
+            cache_write=int(cache.get("write") or 0),
+            reasoning=int(tok.get("reasoning") or 0),
+            reported_cost=float(obj.get("cost") or 0) or None,
+            uid=str(obj.get("id")),
+        )
+
+
+class Pi(Source):
+    """~/.pi/agent/sessions/<slug>/<stamp>_<id>.jsonl.
+
+    Pi names the provider and the API dialect on every assistant message and
+    carries its own cost breakdown, so it needs no model guessing.
+    """
+    name = "pi"
+    home_hint = ".pi"
+
+    def files(self):
+        return sorted((HOME / ".pi" / "agent" / "sessions").glob("*/*.jsonl"))
+
+    def parse(self, path, offset, ctx):
+        for obj, pos in self._lines(path, offset, ""):
+            if obj is None:
+                return pos
+            if obj.get("type") == "session":
+                ctx["cwd"] = obj.get("cwd") or ctx.get("cwd")
+                continue
+            msg = obj.get("message") or {}
+            u = msg.get("usage") or {}
+            if msg.get("role") != "assistant" or not u.get("totalTokens"):
+                continue
+            yield Rec(
+                ts=self._iso(obj.get("timestamp")),
+                harness=self.name,
+                model=msg.get("model") or "",
+                project=self._project(ctx.get("cwd")),
+                provider=msg.get("provider") or "",
+                input=int(u.get("input") or 0),
+                output=int(u.get("output") or 0),
+                cache_read=int(u.get("cacheRead") or 0),
+                cache_write=int(u.get("cacheWrite") or 0),
+                reported_cost=float((u.get("cost") or {}).get("total") or 0) or None,
+            )
+
+
+class Qwen(Source):
+    """~/.qwen/usage_record.jsonl, one line per session, rewritten as it runs.
+
+    Gemini convention: cached tokens are inside the prompt count and thought
+    tokens are inside the candidate count. The file is small and a session is
+    written more than once, so it is re-read whole and the last line for a
+    session wins.
+    """
+    name = "qwen-code"
+    home_hint = ".qwen"
+    rescan = True
+
+    def files(self):
+        path = HOME / ".qwen" / "usage_record.jsonl"
+        return [path] if path.is_file() else []
+
+    def parse(self, path, offset, ctx):
+        sessions: dict[str, list[Rec]] = {}
+        for obj, pos in self._lines(path, 0, '"models"'):
+            if obj is None:
+                break
+            sid = obj.get("sessionId") or ""
+            ts = float(obj.get("timestamp") or 0) / 1000 or time.time()
+            project = self._project(obj.get("project"))
+            out = []
+            for model, m in (obj.get("models") or {}).items():
+                cached = int(m.get("cachedTokens") or 0)
+                out.append(Rec(
+                    ts=ts, harness=self.name, model=model, project=project,
+                    input=max(0, int(m.get("inputTokens") or 0) - cached),
+                    output=int(m.get("outputTokens") or 0),
+                    cache_read=cached,
+                    reasoning=int(m.get("thoughtsTokens") or 0),
+                    requests=int(m.get("requests") or 1),
+                ))
+            if out:
+                sessions[sid] = out
+        for recs in sessions.values():
+            yield from recs
+        return path.stat().st_size
+
+
+class GeminiCli(Source):
+    """~/.gemini/tmp/<hash>/chats/*.json checkpoints, when they carry usage.
+
+    Gemini CLI only persists `usageMetadata` on saved checkpoints, so an
+    installed CLI with no saved chats reports zero files rather than zero cost.
+    """
+    name = "gemini-cli"
+    home_hint = ".gemini"
+    rescan = True
+
+    def files(self):
+        root = HOME / ".gemini" / "tmp"
+        return sorted(p for p in root.glob("*/chats/*.json")) if root.is_dir() else []
+
+    def parse(self, path, offset, ctx):
+        try:
+            obj = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return 0
+        turns = obj if isinstance(obj, list) else obj.get("history") or []
+        model = obj.get("model") if isinstance(obj, dict) else ""
+        stamp = path.stat().st_mtime
+        for turn in turns:
+            u = (turn or {}).get("usageMetadata") if isinstance(turn, dict) else None
+            if not u:
+                continue
+            cached = int(u.get("cachedContentTokenCount") or 0)
+            yield Rec(
+                ts=stamp, harness=self.name,
+                model=turn.get("model") or model or "gemini-2.5-pro",
+                project=path.parent.parent.name,
+                input=max(0, int(u.get("promptTokenCount") or 0) - cached),
+                output=int(u.get("candidatesTokenCount") or 0),
+                cache_read=cached,
+                reasoning=int(u.get("thoughtsTokenCount") or 0),
+            )
+        return path.stat().st_size
+
+
+class Goose(Source):
+    """~/.local/share/goose/sessions/*.jsonl, usage on the assistant messages."""
+    name = "goose"
+    home_hint = ".local/share/goose"
+
+    def files(self):
+        root = HOME / ".local" / "share" / "goose" / "sessions"
+        return sorted(root.glob("*.jsonl")) if root.is_dir() else []
+
+    def parse(self, path, offset, ctx):
+        for obj, pos in self._lines(path, offset, "oken"):
+            if obj is None:
+                return pos
+            if obj.get("working_dir"):
+                ctx["cwd"] = obj["working_dir"]
+            u = obj.get("usage") or obj.get("token_usage") or {}
+            if not isinstance(u, dict):
+                continue
+            inp = int(u.get("input_tokens") or u.get("prompt_tokens") or 0)
+            out = int(u.get("output_tokens") or u.get("completion_tokens") or 0)
+            if not (inp or out):
+                continue
+            yield Rec(
+                ts=self._iso(obj.get("created") or obj.get("timestamp")),
+                harness=self.name,
+                model=obj.get("model") or u.get("model") or "",
+                project=self._project(ctx.get("cwd")),
+                input=inp, output=out,
+                cache_read=int(u.get("cache_read_input_tokens") or 0),
+                cache_write=int(u.get("cache_creation_input_tokens") or 0),
+            )
+
+
+class Crush(Source):
+    """~/.local/share/crush/crush.db, one row per assistant message."""
+    name = "crush"
+    home_hint = ".local/share/crush"
+
+    def files(self):
+        path = HOME / ".local" / "share" / "crush" / "crush.db"
+        return [path] if path.is_file() else []
+
+    def parse(self, path, offset, ctx):
+        try:
+            db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=15)
+            db.row_factory = sqlite3.Row
+            rows = db.execute(
+                "SELECT * FROM messages WHERE created_at > ? ORDER BY created_at",
+                (offset,)).fetchall()
+        except sqlite3.Error:
+            return offset
+        newest = offset
+        for row in rows:
+            keys = row.keys()
+            newest = max(newest, int(row["created_at"] or 0))
+            inp = int(row["input_tokens"] or 0) if "input_tokens" in keys else 0
+            out = int(row["output_tokens"] or 0) if "output_tokens" in keys else 0
+            if not (inp or out):
+                continue
+            yield Rec(
+                ts=float(row["created_at"] or 0) or time.time(),
+                harness=self.name,
+                model=row["model"] if "model" in keys else "",
+                project="unknown",
+                provider=row["provider"] if "provider" in keys else "",
+                input=inp, output=out,
+                cache_read=int(row["cache_read_tokens"] or 0) if "cache_read_tokens" in keys else 0,
+                cache_write=int(row["cache_creation_tokens"] or 0) if "cache_creation_tokens" in keys else 0,
+            )
+        db.close()
+        return newest
+
+
+class CopilotCli(Source):
+    """~/.copilot/history-session-state/*.json, usage on the model responses."""
+    name = "copilot-cli"
+    home_hint = ".copilot"
+    rescan = True
+
+    def files(self):
+        root = HOME / ".copilot" / "history-session-state"
+        return sorted(root.glob("*.json")) if root.is_dir() else []
+
+    def parse(self, path, offset, ctx):
+        try:
+            obj = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return 0
+        stamp = path.stat().st_mtime
+        for turn in _walk_usage(obj):
+            u, model = turn
+            cached = int(u.get("cached_tokens") or (u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+            inp = int(u.get("prompt_tokens") or u.get("input_tokens") or 0)
+            yield Rec(
+                ts=stamp, harness=self.name, model=model or "",
+                project=self._project(obj.get("cwd") if isinstance(obj, dict) else None),
+                input=max(0, inp - cached),
+                output=int(u.get("completion_tokens") or u.get("output_tokens") or 0),
+                cache_read=cached,
+            )
+        return path.stat().st_size
+
+
+class Droid(Source):
+    """~/.factory/sessions/*.jsonl, Factory's droid CLI."""
+    name = "droid"
+    home_hint = ".factory"
+
+    def files(self):
+        root = HOME / ".factory" / "sessions"
+        return sorted(root.glob("**/*.jsonl")) if root.is_dir() else []
+
+    def parse(self, path, offset, ctx):
+        for obj, pos in self._lines(path, offset, "oken"):
+            if obj is None:
+                return pos
+            if obj.get("cwd"):
+                ctx["cwd"] = obj["cwd"]
+            msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
+            u = msg.get("usage") or {}
+            if not isinstance(u, dict) or not u:
+                continue
+            inp = int(u.get("input_tokens") or u.get("prompt_tokens") or 0)
+            out = int(u.get("output_tokens") or u.get("completion_tokens") or 0)
+            if not (inp or out):
+                continue
+            yield Rec(
+                ts=self._iso(obj.get("timestamp")),
+                harness=self.name,
+                model=msg.get("model") or "",
+                project=self._project(ctx.get("cwd")),
+                input=inp, output=out,
+                cache_read=int(u.get("cache_read_input_tokens") or 0),
+                cache_write=int(u.get("cache_creation_input_tokens") or 0),
+            )
+
+
+def _walk_usage(obj, model=""):
+    """Every `usage` dict in a nested structure, with the nearest model name."""
+    if isinstance(obj, dict):
+        model = obj.get("model") or obj.get("modelId") or model
+        u = obj.get("usage")
+        if isinstance(u, dict) and any(k for k in u if "token" in k):
+            yield u, model
+        for v in obj.values():
+            yield from _walk_usage(v, model)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _walk_usage(v, model)
+
+
+def _live_sessions(harness, paths, extract, max_age=900):
+    """A gauge of sessions whose state file moved recently, by project."""
+    counts: dict[tuple[str, str], int] = {}
+    now = time.time()
+    for path in paths:
+        try:
+            if now - path.stat().st_mtime > max_age:
+                continue
+            cwd, status = extract(json.loads(path.read_text()))
+        except (OSError, ValueError, TypeError):
+            continue
+        key = (pathlib.PurePath(cwd or "unknown").name or "unknown", str(status or "unknown"))
+        counts[key] = counts.get(key, 0) + 1
+    return [("aiusage_sessions_live",
+             {"harness": harness, "project": p, "status": s}, float(n))
+            for (p, s), n in counts.items()]
+
+
+SOURCES: list[type[Source]] = [
+    ClaudeCode, Codex, KimiCode, OpenCode, Pi, Qwen,
+    GeminiCli, Goose, Crush, CopilotCli, Droid,
+]
+
+
+# --------------------------------------------------------------------------
+# scanning
+# --------------------------------------------------------------------------
+
+def scan(db: sqlite3.Connection, prices: Prices, only: str = "") -> Scan:
+    """Read what is new on disk into the ledger. Safe to call repeatedly."""
+    started = time.time()
+    result = Scan()
+    for cls in SOURCES:
+        src = cls()
+        if only and src.name != only:
+            continue
+        found = 0
+        for path in src.files():
+            try:
+                found += 1
+                result.records += _scan_file(db, prices, src, path)
+            except FileNotFoundError:
+                # A live session rotated the file between the glob and the
+                # open. Nothing failed; there is simply nothing there now.
+                found -= 1
+            except (OSError, sqlite3.Error, ValueError) as e:
+                result.failed(str(path), e)
+        result.files[src.name] = found
+        try:
+            result.gauges.extend(src.gauges())
+        except (OSError, ValueError) as e:
+            result.failed(f"{src.name} gauges", e)
+    db.execute("INSERT OR REPLACE INTO meta VALUES ('scanned', ?)", (str(time.time()),))
+    db.commit()
+    result.seconds = time.time() - started
+    return result
+
+
+def _scan_file(db, prices, src: Source, path: pathlib.Path) -> int:
+    key = str(path)
+    stat = path.stat()
+    row = db.execute("SELECT size, mtime, offset, ctx FROM files WHERE path = ?", (key,)).fetchone()
+    offset = int(row["offset"]) if row else 0
+    ctx = json.loads(row["ctx"]) if row and row["ctx"] else {}
+
+    if row and stat.st_size == row["size"] and stat.st_mtime == row["mtime"]:
+        return 0
+    if src.rescan or stat.st_size < (row["size"] if row else 0):
+        # Rewritten rather than appended to: drop what this file contributed
+        # before reading it again, or the rows would count twice.
+        db.execute("DELETE FROM usage WHERE path = ?", (key,))
+        offset, ctx = 0, {}
+
+    rows: dict[tuple, list[float]] = {}
+    count = 0
+    gen = src.parse(path, offset, ctx)
+    while True:
+        try:
+            rec = next(gen)
+        except StopIteration as stop:
+            offset = stop.value if isinstance(stop.value, (int, float)) else stat.st_size
+            break
+        if rec.uid is not None:
+            uid = _uid(f"{src.name}:{rec.uid}")
+            if db.execute("SELECT 1 FROM seen WHERE uid = ?", (uid,)).fetchone():
+                continue
+            db.execute("INSERT OR IGNORE INTO seen VALUES (?)", (uid,))
+        rec.provider = prices.provider_of(rec.provider, rec.model)
+        k = (rec.day(), rec.harness, rec.provider, rec.model or "unknown", rec.project, rec.kind)
+        acc = rows.setdefault(k, [0.0] * 7)
+        for i, name in enumerate(TOKEN_ROLES):
+            acc[i] += getattr(rec, name)
+        acc[5] += rec.requests
+        acc[6] += rec.reported_cost or 0.0
+        count += 1
+
+    for k, acc in rows.items():
+        db.execute("""
+            INSERT INTO usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT (day, harness, provider, model, project, kind, path) DO UPDATE SET
+              input = input + excluded.input, output = output + excluded.output,
+              cache_read = cache_read + excluded.cache_read,
+              cache_write = cache_write + excluded.cache_write,
+              reasoning = reasoning + excluded.reasoning,
+              requests = requests + excluded.requests,
+              reported_cost = reported_cost + excluded.reported_cost
+        """, (*k, key, *[int(v) for v in acc[:6]], acc[6]))
+    db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?)",
+               (key, stat.st_size, stat.st_mtime, int(offset), json.dumps(ctx)))
+    db.commit()
+    return count
+
+
+# --------------------------------------------------------------------------
+# reading the ledger
+# --------------------------------------------------------------------------
+
+SUM_COLUMNS = ("input", "output", "cache_read", "cache_write", "reasoning",
+               "requests", "reported_cost")
+BILLED_ROLES = ("input", "output", "cache_read", "cache_write")
+
+
+def totals(db, group: tuple[str, ...] = (), since: str = "", until: str = "",
+           where: dict[str, str] | None = None, prices: "Prices | None" = None) -> list[dict]:
+    """Sum the ledger, grouped by whichever label columns are asked for.
+
+    The SQL always groups by provider and model as well, because that is what
+    a rate is looked up by; the result is priced and then folded down to the
+    grouping that was asked for.
+    """
+    prices = prices if prices is not None else Prices(load_catalogue(refresh=False))
+    inner = tuple(dict.fromkeys(group + ("provider", "model")))
+    cols = ", ".join(inner)
+    sums = ", ".join(f"SUM({c}) AS {c}" for c in SUM_COLUMNS)
+    sql = f"SELECT {cols}, {sums} FROM usage"
+    clauses, params = [], []
+    if since:
+        clauses.append("day >= ?")
+        params.append(since)
+    if until:
+        clauses.append("day <= ?")
+        params.append(until)
+    for k, v in (where or {}).items():
+        clauses.append(f"{k} = ?")
+        params.append(v)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += f" GROUP BY {cols}"
+
+    folded: dict[tuple, dict] = {}
+    for raw in db.execute(sql, params):
+        row = dict(raw)
+        rates = prices.lookup(row["provider"], row["model"])
+        row["cost"] = sum(row[r] * rates[r] for r in BILLED_ROLES) / 1e6 if rates else 0.0
+        key = tuple(row[k] for k in group)
+        acc = folded.get(key)
+        if acc is None:
+            folded[key] = {**{k: row[k] for k in group}, "cost": row["cost"],
+                           **{c: row[c] for c in SUM_COLUMNS}}
+        else:
+            acc["cost"] += row["cost"]
+            for c in SUM_COLUMNS:
+                acc[c] += row[c]
+    return sorted(folded.values(), key=lambda r: -r["cost"]) if group else \
+        list(folded.values()) or [dict.fromkeys(("cost",) + SUM_COLUMNS, 0)]
+
+
+def day_bounds(db) -> tuple[str, str]:
+    row = db.execute("SELECT MIN(day) a, MAX(day) b FROM usage").fetchone()
+    return (row["a"] or "", row["b"] or "")
+
+
+def unpriced(db, prices: "Prices | None" = None) -> list[dict]:
+    """Models carrying tokens but no price. The honest gap."""
+    prices = prices if prices is not None else Prices(load_catalogue(refresh=False))
+    out = []
+    for row in totals(db, ("harness", "provider", "model"), prices=prices):
+        tokens = sum(row[r] for r in BILLED_ROLES)
+        if tokens and not prices.lookup(row["provider"], row["model"]):
+            out.append({"harness": row["harness"], "provider": row["provider"],
+                        "model": row["model"], "tokens": tokens})
+    return sorted(out, key=lambda r: -r["tokens"])

@@ -133,6 +133,34 @@ services:
     labels:
       org.label-schema.group: "rig-telemetry"
 
+  # What the AI coding harnesses spent, read from the session files they each
+  # write. $HOME is mounted read-only because the set of directories to watch
+  # grows every time a new harness ships; the cache directory is shared with
+  # the host so `rig ai` and this container read one ledger.
+  harness-exporter:
+    image: python:3.13-alpine
+    container_name: rig-harness-exporter
+    network_mode: host
+    restart: unless-stopped
+    user: "${RIG_UID:-1000}:${RIG_GID:-1000}"
+    environment:
+      RIG_AI_HOME: /host/home
+      RIG_AI_CACHE: /var/lib/rig-ai
+      RIG_AI_ADDR: 127.0.0.1
+      RIG_AI_PORT: "13360"
+      RIG_AI_INTERVAL: "${RIG_AI_INTERVAL:-60}"
+      RIG_AI_TOP_PROJECTS: "${RIG_AI_TOP_PROJECTS:-80}"
+    volumes:
+      - ./tools:/tools:ro
+      - ${RIG_AI_HOME:-${HOME}}:/host/home:ro
+      - ${RIG_AI_CACHE:-${HOME}/.cache/rig-telemetry}:/var/lib/rig-ai
+      # The ledger buckets by local day and `rig ai` on the host reads the same
+      # rows, so both have to agree on where a day ends.
+      - /etc/localtime:/etc/localtime:ro
+    command: ["python3", "/tools/harness-exporter.py"]
+    labels:
+      org.label-schema.group: "rig-telemetry"
+
   # Container attribution, so a runaway build in Docker is not invisible.
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.55.1

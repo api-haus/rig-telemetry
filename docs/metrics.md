@@ -123,6 +123,42 @@ not broken.
 
 ---
 
+## `rig:ai:` harness spend — `prometheus/rules/50-ai.yml`
+
+Every dollar is **API list value**: what the tokens would cost billed through
+the provider's API, not money that left a subscription. `docs/ai-usage.md` has
+the readers, the token conventions and the pricing rules.
+
+| Series | Labels | Meaning |
+| --- | --- | --- |
+| `rig:ai:cost_usd` | — | Running total across every harness |
+| `rig:ai:cost_usd:by_harness` | `harness` | Same, per harness |
+| `rig:ai:cost_usd:by_model` | `harness`, `model` | Same, per model |
+| `rig:ai:cost_usd:by_project` | `harness`, `project` | Same, per project directory |
+| `rig:ai:cost_usd:by_role` | `role` | **Where the money goes.** Read this first. |
+| `rig:ai:cost_usd:by_kind` | `harness`, `kind` | `main` against `subagent` |
+| `rig:ai:burn_usd_per_hour` | — | Dollars of list value per hour, over the last hour |
+| `rig:ai:cost_usd:today` / `:week` | — | Increase over 24h / 7d |
+| `rig:ai:tokens:by_role` | `role` | `input`, `output`, `cache_read`, `cache_write`, `reasoning` |
+| `rig:ai:tokens_per_sec` | `harness`, `role` | Live throughput |
+| `rig:ai:requests_per_hour` | `harness` | API responses per hour |
+| `rig:ai:cache_read_share` | — | Share of input-side tokens that are the window re-read |
+| `rig:ai:usd_per_million_tokens` | — | Blended rate. Steps up when a cache lapses. |
+| `rig:ai:reported_cost_usd` / `rig:ai:subsidy_usd` | — | What harnesses claim, and the gap to list |
+| `rig:ai:sessions_live` | `harness` | Sessions whose state file moved recently |
+| `rig:ai:limit_used_ratio` | `harness`, `window`, `plan` | Subscription window consumed. Codex only. |
+| `rig:ai:limit_reset_in_seconds` | `harness`, `window` | Until that window resets |
+| `rig:ai:unpriced_tokens` | — | Tokens whose model publishes no rate, excluded from every figure |
+| `rig:ai:scan_age_seconds` | — | Since the exporter last read the session files |
+
+`reasoning` is already inside `output`. It is reported and never priced.
+
+These counters begin at whatever was already on disk when the exporter first
+ran, so `increase()` over a window that predates it reports nothing. Use `rig
+ai daily` for that history, or import it once with `rig ai backfill`.
+
+---
+
 ## Alerts — `prometheus/rules/40-alerts.yml`
 
 There is no Alertmanager and no receiver, by design. A firing alert is a series:
@@ -142,6 +178,8 @@ Thermal: `RigGPUThrottleImminent`, `RigCPUHot`, `RigPumpStalled`,
 Hardware: `RigDiskWearHigh`, `RigDiskMediaErrors`, `RigDiskSmartFailing`.
 Meta: `RigExporterDown`, `RigDataGap` — check these first if the machine looks
 impossibly quiet.
+AI, in `50-ai.yml`: `RigAiExporterDown`, `RigAiLedgerStale`, `RigAiPricesStale`,
+`RigAiSubscriptionWindowNearlyUsed`, `RigAiBurnRateHigh`.
 
 ---
 
@@ -154,3 +192,4 @@ impossibly quiet.
 | `nvidia_smi_*` | nvidia_gpu_exporter | Also PCIe link state, encoder sessions, per-engine utilisation |
 | `smartctl_device_*` | smartctl-exporter | Wear, media errors, power-on hours, unsafe shutdowns |
 | `container_*` | cAdvisor | Per-container; some high-cardinality families are dropped at scrape time |
+| `aiusage_*` | harness-exporter | The source for `rig:ai:*`. Counters are lifetime totals from the session files on disk. |

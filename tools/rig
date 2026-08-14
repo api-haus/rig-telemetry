@@ -16,6 +16,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 PROM = os.environ.get("RIG_PROMETHEUS", "http://127.0.0.1:13390")
 TIMEOUT = float(os.environ.get("RIG_TIMEOUT", "30"))
 HERE = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE / "tools"))
 
 
 def stack_root() -> tuple[pathlib.Path, str]:
@@ -637,6 +639,446 @@ def cmd_health(args) -> int:
 
 
 # --------------------------------------------------------------------------
+# rig ai — what the coding harnesses spent
+# --------------------------------------------------------------------------
+#
+# These read the SQLite ledger rather than Prometheus. The ledger holds every
+# session file still on disk, which reaches back further than the stack has
+# been recording, and it answers when the stack is down.
+
+def _ledger(args, write: bool = False):
+    import harness_usage as hu
+    try:
+        return hu, hu.open_ledger(read_only=not write)
+    except FileNotFoundError:
+        raise SystemExit(
+            f"rig: no usage ledger at {hu.ledger_path()}\n"
+            "  the harness exporter has not run yet. start the stack:\n"
+            f"    cd {stack_root()[0]} && docker compose up -d harness-exporter\n"
+            "  or build it here and now:  rig ai scan")
+
+
+def _since_day(args) -> str:
+    """The ledger buckets by local day, so the cutoff is a local day too."""
+    if not getattr(args, "since", None):
+        return ""
+    return (datetime.now() - parse_duration(args.since)).strftime("%Y-%m-%d")
+
+
+def money(v) -> str:
+    return "n/a" if v is None else f"${v:,.2f}"
+
+
+def toks(v) -> str:
+    if v is None:
+        return "n/a"
+    for unit, div in (("T", 1e12), ("B", 1e9), ("M", 1e6), ("k", 1e3)):
+        if abs(v) >= div:
+            return f"{v / div:.2f}{unit}"
+    return f"{v:.0f}"
+
+
+def cmd_ai(args) -> int:
+    hu, db = _ledger(args)
+    since = _since_day(args)
+    prices = hu.Prices(hu.load_catalogue(refresh=False))
+    span = f"since {since}" if since else "all recorded history"
+    total = hu.totals(db, (), since=since, prices=prices)[0]
+    if not total["requests"]:
+        print(f"no harness usage recorded {span}.")
+        return 0
+
+    billed = sum(total[r] for r in hu.BILLED_ROLES)
+    first, last = hu.day_bounds(db)
+    by_harness = hu.totals(db, ("harness",), since=since, prices=prices)
+    by_model = hu.totals(db, ("harness", "model"), since=since, prices=prices)
+    by_project = hu.totals(db, ("harness", "project"), since=since, prices=prices)[:args.top]
+    by_kind = hu.totals(db, ("kind",), since=since, prices=prices)
+    roles = _role_costs(hu, db, since, prices)
+
+    if args.json:
+        print(json.dumps({"window": span, "recorded": [first, last], "total": total,
+                          "by_harness": by_harness, "by_model": by_model,
+                          "by_project": by_project, "by_kind": by_kind,
+                          "by_role": roles}, indent=2))
+        return 0
+
+    print(f"API list value of everything the coding harnesses did, {span}")
+    print(f"(session files on disk cover {first} to {last})\n")
+    print(rule("total"))
+    print(f"  {money(total['cost'])} across {total['requests']:,.0f} API responses "
+          f"and {toks(billed)} billable tokens")
+    reported = total["reported_cost"]
+    if reported:
+        print(f"  harnesses that report a cost themselves claim {money(reported)} of it")
+    print(f"  {money(total['cost'] / max(billed, 1) * 1e6)} per million tokens, blended")
+    print()
+
+    print(rule("by harness"))
+    print(table([(r["harness"], money(r["cost"]), toks(sum(r[k] for k in hu.BILLED_ROLES)),
+                  f"{r['requests']:,.0f}") for r in by_harness],
+                ("harness", "list value", "tokens", "responses")))
+    print()
+
+    print(rule("where the money goes"))
+    print(table([(role, money(cost), toks(tok),
+                  f"{cost / max(total['cost'], 1e-9) * 100:.0f}%")
+                 for role, cost, tok in roles],
+                ("role", "list value", "tokens", "share")))
+    print("  cache_read is the window being re-sent on every request.")
+    print()
+
+    print(rule("by model"))
+    print(table([(r["harness"], r["model"], money(r["cost"]), f"{r['requests']:,.0f}")
+                 for r in by_model[:args.top]],
+                ("harness", "model", "list value", "responses")))
+    print()
+
+    print(rule(f"top {len(by_project)} projects"))
+    print(table([(r["project"], r["harness"], money(r["cost"]),
+                  toks(sum(r[k] for k in hu.BILLED_ROLES))) for r in by_project],
+                ("project", "harness", "list value", "tokens")))
+    print()
+
+    print(rule("who did the work"))
+    print(table([(r["kind"], money(r["cost"]),
+                  f"{r['cost'] / max(total['cost'], 1e-9) * 100:.0f}%") for r in by_kind],
+                ("", "list value", "share")))
+    gap = hu.unpriced(db, prices)
+    if gap:
+        print()
+        print(rule("no published price — excluded from every figure above"))
+        print(table([(r["harness"], r["model"], toks(r["tokens"])) for r in gap],
+                    ("harness", "model", "tokens")))
+    return 0
+
+
+def _role_costs(hu, db, since: str, prices):
+    """Cost per token role, priced the same way the exporter prices it."""
+    acc: dict[str, list[float]] = {}
+    for row in hu.totals(db, ("provider", "model"), since=since, prices=prices):
+        rates = prices.lookup(row["provider"], row["model"])
+        for role in hu.BILLED_ROLES:
+            cell = acc.setdefault(role, [0.0, 0.0])
+            cell[0] += row[role] * rates[role] / 1e6 if rates else 0.0
+            cell[1] += row[role]
+    return sorted(((role, c, t) for role, (c, t) in acc.items()), key=lambda r: -r[1])
+
+
+def cmd_ai_daily(args) -> int:
+    hu, db = _ledger(args)
+    since = _since_day(args)
+    group = ("day", "harness") if args.by_harness else ("day",)
+    rows = sorted(hu.totals(db, group, since=since), key=lambda r: r["day"])
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    if not rows:
+        print("no usage recorded in that window.")
+        return 0
+
+    if args.by_harness:
+        days: dict[str, dict[str, float]] = {}
+        harnesses = sorted({r["harness"] for r in rows})
+        for r in rows:
+            days.setdefault(r["day"], {})[r["harness"]] = r["cost"]
+        out = [(d, *[money(v.get(h, 0)) for h in harnesses], money(sum(v.values())))
+               for d, v in sorted(days.items())]
+        print(table(out, ("day", *harnesses, "total")))
+    else:
+        out = [(r["day"], money(r["cost"]), toks(sum(r[k] for k in hu.BILLED_ROLES)),
+                f"{r['requests']:,.0f}") for r in rows]
+        print(table(out, ("day", "list value", "tokens", "responses")))
+        print()
+        print("  " + sparkline([r["cost"] for r in rows]))
+    total = sum(r["cost"] for r in rows)
+    print(f"\n  {money(total)} over {len({r['day'] for r in rows})} days, "
+          f"{money(total / max(len({r['day'] for r in rows}), 1))} a day")
+    return 0
+
+
+def cmd_ai_projects(args) -> int:
+    hu, db = _ledger(args)
+    since = _since_day(args)
+    rows = hu.totals(db, ("project", "harness"), since=since)[:args.top]
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    print(table([(r["project"], r["harness"], money(r["cost"]),
+                  toks(sum(r[k] for k in hu.BILLED_ROLES)),
+                  f"{r['requests']:,.0f}", money(r["cost"] / max(r["requests"], 1)))
+                 for r in rows],
+                ("project", "harness", "list value", "tokens", "responses", "per response")))
+    return 0
+
+
+def cmd_ai_models(args) -> int:
+    hu, db = _ledger(args)
+    since = _since_day(args)
+    rows = hu.totals(db, ("provider", "model", "harness"), since=since)
+    prices = hu.Prices(hu.load_catalogue(refresh=False))
+    out = []
+    for r in rows:
+        rates = prices.lookup(r["provider"], r["model"])
+        out.append((r["model"], r["provider"], r["harness"], money(r["cost"]),
+                    f"{r['requests']:,.0f}",
+                    f"{rates['input']:g}/{rates['cache_read']:g}/{rates['cache_write']:g}/{rates['output']:g}"
+                    if rates else "no published price"))
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    print(table(out, ("model", "provider", "harness", "list value", "responses",
+                      "$/M in/read/write/out")))
+    return 0
+
+
+def cmd_ai_limits(args) -> int:
+    """Subscription windows, straight from the harness that publishes them.
+
+    A harness writes these only while it is running, so an idle one leaves a
+    figure that was true when it last ran. The measurement time is a column
+    rather than a footnote, because a window that reset hours ago reads as
+    fully used until the harness runs again.
+    """
+    now = datetime.now(timezone.utc).timestamp()
+    rows = []
+    for s in query("aiusage_rate_limit_used_ratio", args.at):
+        m = s["metric"]
+        where = f'{{harness="{m.get("harness")}",window="{m.get("window")}"}}'
+        reset = scalar(f"aiusage_rate_limit_reset_timestamp_seconds{where}", args.at)
+        seen = scalar(f'aiusage_rate_limit_seen_timestamp_seconds{{harness="{m.get("harness")}"}}',
+                      args.at)
+        span = lambda v: "-" if v is None else str(timedelta(seconds=int(abs(v))))
+        rows.append((m.get("harness", "?"), m.get("plan", "?"), m.get("window", "?"),
+                     pct(float(s["value"][1])),
+                     "elapsed" if reset and reset < now else span(reset and reset - now),
+                     span(seen and now - seen) + " ago" if seen else "-"))
+    if args.json:
+        print(json.dumps([dict(zip(("harness", "plan", "window", "used", "resets_in", "measured"), r))
+                          for r in rows], indent=2))
+        return 0
+    print(table(rows, ("harness", "plan", "window", "used", "resets in", "measured")))
+    if not rows:
+        print("  no harness on this machine publishes its subscription window.")
+    else:
+        print("\n  Read only while the harness runs. An `elapsed` window has reset since.")
+    return 0
+
+
+def cmd_ai_scan(args) -> int:
+    """Read new session files into the ledger without the container."""
+    hu, db = _ledger(args, write=True)
+    if args.fetch_prices:
+        print(f"prices: {hu.fetch_catalogue()} providers from models.dev")
+    prices = hu.Prices()
+    result = hu.scan(db, prices, only=args.harness or "")
+    print(f"scanned {sum(result.files.values())} files in {result.seconds:.1f}s, "
+          f"{result.records:,} new records, {result.errors} unreadable")
+    print(table(sorted(result.files.items()), ("harness", "files")))
+    for problem in result.problems:
+        print(f"  ! {problem}")
+    return 0
+
+
+def cmd_ai_doctor(args) -> int:
+    """Where every number came from, and what is missing."""
+    import harness_usage as hu
+    print(rule("sources"))
+    rows = []
+    for cls in hu.SOURCES:
+        src = cls()
+        found = len(src.files()) if src.installed() else 0
+        rows.append((src.name, "yes" if src.installed() else "no", found,
+                     "reads it" if found else
+                     ("installed, no session files yet" if src.installed() else "not installed")))
+    print(table(rows, ("harness", "on this machine", "files", "")))
+    print(f"\n  home searched: {hu.HOME}")
+
+    path = hu.catalogue_path()
+    print()
+    print(rule("prices"))
+    if path.is_file():
+        age = (time.time() - path.stat().st_mtime) / 86400
+        cat = hu.load_catalogue(refresh=False)
+        print(f"  models.dev, {len(cat)} providers, fetched {age:.1f} days ago")
+        print(f"  {path}")
+    else:
+        print("  no catalogue. no money figures until one is fetched: rig ai scan --fetch-prices")
+
+    try:
+        _, db = _ledger(args)
+    except SystemExit as e:
+        print(f"\n{e}")
+        return 1
+    first, last = hu.day_bounds(db)
+    total = hu.totals(db, ())[0]
+    print()
+    print(rule("ledger"))
+    print(f"  {hu.ledger_path()}")
+    print(f"  {first} to {last}, {total['requests']:,.0f} API responses, {money(total['cost'])}")
+    gap = hu.unpriced(db)
+    if gap:
+        print()
+        print(rule("counted but not priced"))
+        print(table([(r["harness"], r["provider"], r["model"], toks(r["tokens"])) for r in gap],
+                    ("harness", "provider", "model", "tokens")))
+        print("  These models publish no per-token rate. Half a money figure is worse than none.")
+
+    reported = [r for r in hu.totals(db, ("harness", "model")) if r["reported_cost"]]
+    if reported:
+        print()
+        print(rule("list price against what the harness itself claims"))
+        print(table([(r["harness"], r["model"], money(r["cost"]), money(r["reported_cost"]),
+                      f"{r['cost'] / max(r['reported_cost'], 1e-9):.2f}x") for r in reported],
+                    ("harness", "model", "list", "reported", "ratio")))
+
+    stats = hu.HOME / ".claude" / "stats-cache.json"
+    if stats.is_file():
+        print()
+        print(rule("why this disagrees with Claude Code's own counter"))
+        print("  One API response is written to the transcript once per content block —\n"
+              "  thinking, text and each tool call — and every line repeats the same usage\n"
+              "  figures. Claude Code's stats-cache.json adds all of them, so it reads about\n"
+              "  twice this. The message id is deduplicated here, because the response was\n"
+              "  billed once.")
+    return 0
+
+
+def _ai_backfill_undo(args) -> int:
+    """Delete every imported sample in the window, so an import can be redone.
+
+    It removes the live exporter's own samples in the same window too — there
+    is no label that separates them, which is the point: they are the same
+    series. The current totals are unaffected, because a counter carries its
+    whole history in its value; only the drawn curve inside the window goes.
+    """
+    start = (datetime.now(timezone.utc) - parse_duration(args.since)).timestamp()
+    match = '{__name__=~"aiusage_.+"}'
+    params = urllib.parse.urlencode(
+        [("match[]", match), ("start", f"{start:.0f}"), ("end", f"{datetime.now(timezone.utc).timestamp():.0f}")])
+    for path in (f"delete_series?{params}", "clean_tombstones"):
+        req = urllib.request.Request(f"{PROM}/api/v1/admin/tsdb/{path}", data=b"", method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                r.read()
+        except urllib.error.HTTPError as e:
+            print(f"rig: {e.code} from admin API — Prometheus needs "
+                  f"--web.enable-admin-api\n  {e.read()[:200].decode(errors='replace')}",
+                  file=sys.stderr)
+            return 2
+    print(f"deleted {match} over the last {args.since}. "
+          f"Re-import with: rig ai backfill --since {args.since}")
+    return 0
+
+
+def cmd_ai_backfill(args) -> int:
+    """Import the ledger's history into Prometheus as dated blocks.
+
+    A counter only exists from the moment Prometheus starts watching it, so a
+    fresh stack draws a flat line over months of real spend that the ledger
+    already holds.
+
+    The ledger's granularity is a day, but one sample a day is not a series
+    Prometheus can read: a sample is only visible for five minutes after it is
+    written, so a query between two daily points finds nothing and a `sum()`
+    across sparse series silently drops every one that is not stamped at that
+    instant. So each day's running total is repeated at `--step` through the
+    day, which is what the exporter would have produced had it been running.
+    Below `--step` the pre-exporter range shows gaps; `rig ai daily` is the
+    exact figure and needs no import at all.
+    """
+    if args.undo:
+        return _ai_backfill_undo(args)
+    hu, db = _ledger(args)
+    since = _since_day(args)
+    step = int(parse_duration(args.step).total_seconds())
+    if not 60 <= step <= 3600:
+        raise SystemExit("rig: --step must be between 1m and 1h")
+    key_cols = ("day", "harness", "provider", "model", "kind")
+    rows = sorted(hu.totals(db, key_cols, since=since), key=lambda r: r["day"])
+    if not rows:
+        print("nothing to backfill.")
+        return 0
+
+    # Same label shape as the exporter serves, cost included and the scrape's
+    # own job/instance carried over, or these would be different series that
+    # double-count wherever the backfilled range meets the live one. The pair
+    # is read back from a live sample rather than assumed.
+    prices = hu.Prices(hu.load_catalogue(refresh=False))
+    scraped = query("aiusage_cost_usd_total")
+    fixed = scraped[0]["metric"] if scraped else {}
+    common = f'job="{fixed.get("job", "harness")}",instance="{fixed.get("instance", "rig")}"'
+    by_day: dict[str, list] = {}
+    for r in rows:
+        by_day.setdefault(r["day"], []).append(r)
+
+    running: dict[tuple, dict[str, float]] = {}
+    lines = []
+    last = max(by_day)
+    for day in sorted(by_day):
+        for r in by_day[day]:
+            key = tuple(r[c] for c in key_cols[1:])
+            rates = prices.lookup(r["provider"], r["model"])
+            acc = running.setdefault(key, {"requests": 0.0, **dict.fromkeys(
+                [f"{w}_{role}" for role in hu.BILLED_ROLES for w in ("tok", "usd")], 0.0)})
+            acc["requests"] += r["requests"]
+            for role in hu.BILLED_ROLES:
+                acc[f"tok_{role}"] += r[role]
+                acc[f"usd_{role}"] += r[role] * rates[role] / 1e6 if rates else 0.0
+        midnight = int(datetime.strptime(day, "%Y-%m-%d").timestamp())
+        # The last day stops at the previous whole step, so the exporter's own
+        # samples are never overwritten by a flat carried-forward line.
+        end = min(86400, int(datetime.now(timezone.utc).timestamp()) - midnight) \
+            if day == last else 86400
+        for offset in range(0, max(0, end), step):
+            stamp = midnight + offset
+            for key, acc in running.items():
+                tags = (f'{common},harness="{key[0]}",provider="{key[1]}",'
+                        f'model="{key[2]}",kind="{key[3]}"')
+                lines.append(f"aiusage_requests_total{{{tags}}} {acc['requests']:.0f} {stamp}")
+                for role in hu.BILLED_ROLES:
+                    both = f'{{{tags},role="{role}"}}'
+                    lines.append(f"aiusage_tokens_total{both} {acc[f'tok_{role}']:.0f} {stamp}")
+                    lines.append(f"aiusage_cost_usd_total{both} {acc[f'usd_{role}']:.6f} {stamp}")
+
+    body = ("# TYPE aiusage_cost_usd_total counter\n"
+            "# TYPE aiusage_requests_total counter\n"
+            "# TYPE aiusage_tokens_total counter\n"
+            + "\n".join(lines) + "\n# EOF\n")
+    out = pathlib.Path(args.out or "/tmp/rig-ai-backfill.openmetrics")
+    out.write_text(body)
+    days = len(by_day)
+    print(f"wrote {len(lines):,} samples ({out.stat().st_size / 1e6:.1f} MB) "
+          f"over {days} days at {args.step} steps to {out}")
+
+    if args.dry_run:
+        print("\nimport them with:")
+        print(f"  docker cp {out} rig-prometheus:/tmp/backfill.om")
+        print("  docker exec rig-prometheus promtool tsdb create-blocks-from openmetrics "
+              "/tmp/backfill.om /prometheus")
+        print("  docker compose restart prometheus")
+        return 0
+
+    root, _ = stack_root()
+    steps = [
+        ["docker", "cp", str(out), "rig-prometheus:/tmp/backfill.om"],
+        ["docker", "exec", "rig-prometheus", "promtool", "tsdb",
+         "create-blocks-from", "openmetrics", "/tmp/backfill.om", "/prometheus"],
+        ["docker", "compose", "-f", str(root / "docker-compose.yml"), "restart", "prometheus"],
+    ]
+    for step in steps:
+        print("  $ " + " ".join(step))
+        done = subprocess.run(step, capture_output=True, text=True)
+        if done.returncode:
+            print(done.stdout[-2000:] + done.stderr[-2000:], file=sys.stderr)
+            print("rig: backfill stopped. Re-run with --dry-run to do it by hand.", file=sys.stderr)
+            return 2
+    print(f"\n{days} days of history are now in Prometheus. "
+          "Grafana draws them on the next refresh.")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # rig q / range / metrics
 # --------------------------------------------------------------------------
 
@@ -757,6 +1199,48 @@ def main() -> int:
 
     s = sub.add_parser("health", help="is this stack itself working")
     s.set_defaults(fn=cmd_health)
+
+    s = sub.add_parser("ai", help="what the AI coding harnesses spent, at API list prices")
+    s.add_argument("--since", metavar="DUR", help="limit to a window, e.g. 30d")
+    s.add_argument("--top", type=int, default=12)
+    s.set_defaults(fn=cmd_ai)
+    ai = s.add_subparsers(dest="aicmd",
+                          parser_class=lambda **kw: argparse.ArgumentParser(parents=[common], **kw))
+
+    a = ai.add_parser("daily", help="spend per day")
+    a.add_argument("--since", metavar="DUR", default="30d")
+    a.add_argument("--by-harness", action="store_true", help="one column per harness")
+    a.set_defaults(fn=cmd_ai_daily)
+
+    a = ai.add_parser("projects", help="spend per project")
+    a.add_argument("--since", metavar="DUR")
+    a.add_argument("--top", type=int, default=25)
+    a.set_defaults(fn=cmd_ai_projects)
+
+    a = ai.add_parser("models", help="spend per model, with the rates used")
+    a.add_argument("--since", metavar="DUR")
+    a.set_defaults(fn=cmd_ai_models)
+
+    a = ai.add_parser("limits", help="subscription windows, where a harness publishes them")
+    a.set_defaults(fn=cmd_ai_limits)
+
+    a = ai.add_parser("scan", help="read new session files into the ledger now")
+    a.add_argument("--harness", help="only this one")
+    a.add_argument("--fetch-prices", action="store_true", help="refetch models.dev first")
+    a.set_defaults(fn=cmd_ai_scan)
+
+    a = ai.add_parser("doctor", help="what is read, what is priced, and what is missing")
+    a.set_defaults(fn=cmd_ai_doctor)
+
+    a = ai.add_parser("backfill", help="import ledger history into Prometheus")
+    a.add_argument("--since", metavar="DUR", default="30d", help="how far back")
+    a.add_argument("--step", metavar="DUR", default="5m",
+                   help="sample spacing; 5m is what Prometheus can read without gaps")
+    a.add_argument("--out", metavar="PATH", help="where to write the OpenMetrics file")
+    a.add_argument("--dry-run", action="store_true", help="write the file, print the commands")
+    a.add_argument("--undo", action="store_true",
+                   help="delete every aiusage_* sample in the window instead, to import again")
+    a.set_defaults(fn=cmd_ai_backfill)
 
     s = sub.add_parser("q", help="instant PromQL query")
     s.add_argument("expr")

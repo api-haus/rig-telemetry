@@ -22,6 +22,7 @@ every question a human asks is answered by it or by one more command below.
 | `rig who --by <dimension>` | Who is using a resource |
 | `rig timeline --since 24h` | When load spiked, and which group owned each spike |
 | `rig thermals` | Temperatures, and whether cooling has degraded |
+| `rig ai` | What the AI coding harnesses used, at API list prices |
 | `rig containers` | Docker cost per compose stack (`--each` for containers) |
 | `rig disk` | IO, latency, capacity, drive wear |
 | `rig alerts` | What is firing |
@@ -65,6 +66,26 @@ the machine is stopped, not slow.
    Use `rig timeline --since 24h --min-load 2` to find the spike, then
    `rig why --at <that timestamp>`.
 
+## Read this before you quote an AI cost
+
+`rig ai` prices tokens at published API list rates. Under a subscription that
+is **value received, not money spent** — the plan fee is what left the account.
+Say which one you mean; never call the list figure a bill.
+
+```
+rig ai                    # everything, split by harness, role, model, project
+rig ai daily --since 30d  # per day, reaches back further than Prometheus does
+rig ai doctor             # what is read, what is priced, what is missing
+```
+
+Answer "why is it expensive" from the role split, not the model. A running
+context is re-sent on every request, so `cache_read` is normally 70-80% of the
+figure and `output` under 10%.
+
+Expect about half of what Claude Code's own statistics report: it writes one
+transcript line per content block and each repeats the same usage block, while
+this deduplicates on the message id. `docs/ai-usage.md` has the measurement.
+
 ## Metric vocabulary
 
 Everything this stack computes lives in the `rig:` namespace. Raw exporter
@@ -75,7 +96,7 @@ host-level figures.
 
 `rig metrics` lists all of them. `docs/metrics.md` explains each one.
 
-The four groups:
+The five groups:
 
 - `rig:load:*`, `rig:psi:*`, `rig:cpu:*`, `rig:mem:*`, `rig:disk:*`, `rig:fs:*`
   — machine state.
@@ -83,6 +104,7 @@ The four groups:
   `name`. **This is the "who" namespace.**
 - `rig:temp_celsius`, `rig:fan_rpm`, `rig:*_celsius` — sensors, by name.
 - `rig:thermal:*` — derived cooling health, including the degradation ratios.
+- `rig:ai:*` — harness spend, keyed by `harness`, `model`, `project`, `role`.
 
 ## Process groups
 
@@ -143,10 +165,18 @@ process-exporter/config.yml   process group definitions
 grafana/dashboards/*.json     generated — edit tools/gen-dashboards.py instead
 tools/rig                     the CLI above
 tools/gen-dashboards.py       dashboard generator; --check verifies freshness
+tools/harness_usage.py        one reader per AI harness, and the price lookup
+tools/harness-exporter.py     serves that to Prometheus on :13360
 docs/metrics.md               every series, explained
+docs/ai-usage.md              harness readers, token conventions, pricing rules
 docs/thermals.md              how dust detection works and when it lies
 docs/runbook.md               operations
 ```
+
+To teach the stack a new harness, add a `Source` subclass in
+`tools/harness_usage.py` and list it in `SOURCES`. It declares the files it
+owns and yields records in the exclusive token convention; pricing, dedupe,
+incremental reads and every metric come for free.
 
 Grafana is at <http://localhost:13337>, Prometheus at <http://localhost:13390>.
 Both bind to loopback only.

@@ -114,8 +114,20 @@ and a panel that fails to migrate shows as empty rather than as an error.
 
 **Ports.** Everything binds loopback: Grafana **13337**, Prometheus 13390,
 node-exporter 13310, process-exporter 13320, GPU 13330, SMART 13340,
-cAdvisor 13350. The 133xx block is deliberate: nothing common lives there, so
-the dashboard URL stays free and stable across reboots and other software.
+cAdvisor 13350, harness-exporter 13360. The 133xx block is deliberate: nothing
+common lives there, so the dashboard URL stays free and stable across reboots
+and other software.
+
+**The harness exporter runs as you, and can see your home directory.** It reads
+the session files AI coding harnesses write, and those live all over `$HOME` in
+a set that grows with every new harness — so `$HOME` is mounted read-only
+rather than a list of subdirectories that breaks when one does not exist. It
+runs as `RIG_UID`/`RIG_GID` (1000 by default) because it shares its SQLite
+ledger with `rig ai` on the host. Set both in `.env` if your account differs.
+
+The ledger at `~/.cache/rig-telemetry/ai-usage.db` is a cache: every row comes
+from a file still on disk. Delete it and `rig ai scan` rebuilds it, about 15
+seconds for 6.7 GB of transcripts. A schema change rebuilds it on its own.
 
 **GPU exporter.** No nvidia-container-toolkit is installed, so `nvidia-smi` and
 `libnvidia-ml.so` are bind-mounted from the host. A driver upgrade that changes

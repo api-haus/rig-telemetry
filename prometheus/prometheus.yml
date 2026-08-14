@@ -41,6 +41,15 @@ scrape_configs:
       - targets: ['127.0.0.1:13340']
     relabel_configs: *pin_instance
 
+  # Harness spend moves in turns, not in seconds, and the series carry a
+  # project label. Scraping this at 15s would cost more disk than the whole
+  # machine's hardware telemetry and tell nobody anything new.
+  - job_name: harness
+    scrape_interval: 60s
+    static_configs:
+      - targets: ['127.0.0.1:13360']
+    relabel_configs: *pin_instance
+
   - job_name: cadvisor
     static_configs:
       - targets: ['127.0.0.1:13350']
