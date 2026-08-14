@@ -361,6 +361,52 @@ def cmd_timeline(args) -> int:
 
 
 # --------------------------------------------------------------------------
+# rig containers — per compose stack, or per container
+# --------------------------------------------------------------------------
+
+STACK_BY = {
+    "cpu": ("rig:stack:cpu_cores", "rig:container:cpu_cores", "cores", "{:.3f}"),
+    "mem": ("rig:stack:rss_bytes", "rig:container:rss_bytes", "resident", None),
+    "swap": ("rig:stack:swap_bytes", "rig:container:swap_bytes", "swapped out", None),
+    "io": ("rig:stack:io_bytes_per_sec", "rig:container:io_bytes_per_sec", "bytes/s", None),
+}
+
+
+def cmd_containers(args) -> int:
+    key = "name" if args.each else "project"
+    rows: dict[str, dict[str, float]] = {}
+    for dim, (stack_m, each_m, _unit, _fmt) in STACK_BY.items():
+        metric = each_m if args.each else stack_m
+        expr = f"{args.agg}_over_time({metric}[{args.since}])" if args.since else metric
+        for name, value in series(expr, key, args.at):
+            rows.setdefault(name, {})[dim] = value
+    if not args.each:
+        for name, value in series("rig:stack:containers", "project", args.at):
+            rows.setdefault(name, {})["count"] = value
+
+    order = sorted(rows.items(), key=lambda kv: -kv[1].get(args.sort, 0))[:args.top]
+    if args.json:
+        print(json.dumps([{key: n, **v} for n, v in order], indent=2))
+        return 0
+
+    header = ("stack", "containers", "cpu", "resident", "swapped", "io")
+    if args.each:
+        header = ("container", "cpu", "resident", "swapped", "io")
+    out = []
+    for n, v in order:
+        cells = [f"{v.get('cpu', 0):.3f}", human_bytes(v.get("mem", 0)),
+                 human_bytes(v.get("swap", 0)), human_bytes(v.get("io", 0)) + "/s"]
+        out.append((n, f"{v.get('count', 0):.0f}", *cells) if not args.each else (n, *cells))
+
+    window_note = f"{args.agg} over {args.since}" if args.since else "now"
+    print(f"docker {'containers' if args.each else 'stacks'}, sorted by {args.sort} — {window_note}\n")
+    print(table(out, header))
+    if not args.each and out:
+        print(f"\n  {len(rows)} stacks. `--each` for individual containers.")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # rig thermals
 # --------------------------------------------------------------------------
 
@@ -629,6 +675,14 @@ def main() -> int:
     s.add_argument("--show", type=int, default=3, help="groups to print per bucket")
     s.add_argument("--min-load", type=float, default=0.0, help="hide quiet buckets below this load-per-core")
     s.set_defaults(fn=cmd_timeline)
+
+    s = sub.add_parser("containers", help="docker resource use, per compose stack")
+    s.add_argument("--each", action="store_true", help="one row per container instead of per stack")
+    s.add_argument("--sort", choices=sorted(STACK_BY), default="mem")
+    s.add_argument("--top", type=int, default=15)
+    s.add_argument("--since", metavar="DUR", help="aggregate over a window instead of now")
+    s.add_argument("--agg", choices=["avg", "max"], default="max")
+    s.set_defaults(fn=cmd_containers)
 
     s = sub.add_parser("thermals", help="temperatures and cooling degradation vs baseline")
     s.set_defaults(fn=cmd_thermals)

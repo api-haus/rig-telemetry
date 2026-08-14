@@ -22,6 +22,7 @@ every question a human asks is answered by it or by one more command below.
 | `rig who --by <dimension>` | Who is using a resource |
 | `rig timeline --since 24h` | When load spiked, and which group owned each spike |
 | `rig thermals` | Temperatures, and whether cooling has degraded |
+| `rig containers` | Docker cost per compose stack (`--each` for containers) |
 | `rig disk` | IO, latency, capacity, drive wear |
 | `rig alerts` | What is firing |
 | `rig health` | Whether this stack itself is working |

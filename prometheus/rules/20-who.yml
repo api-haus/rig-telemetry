@@ -84,6 +84,28 @@ groups:
         expr: sum by (name) (rate(container_fs_reads_bytes_total{name!=""}[5m]))
               + sum by (name) (rate(container_fs_writes_bytes_total{name!=""}[5m]))
 
+      - record: rig:container:swap_bytes
+        expr: sum by (name) (container_memory_swap{name!=""})
+
+      # --- by compose project ---------------------------------------------
+      # One `docker compose up` is one unit of intent. Per-container numbers
+      # hide the cost of running five worktrees of the same stack at once.
+      - record: rig:stack:cpu_cores
+        expr: sum by (project) (rate(container_cpu_usage_seconds_total{project!=""}[5m]))
+
+      - record: rig:stack:rss_bytes
+        expr: sum by (project) (container_memory_rss{project!=""})
+
+      - record: rig:stack:swap_bytes
+        expr: sum by (project) (container_memory_swap{project!=""})
+
+      - record: rig:stack:io_bytes_per_sec
+        expr: sum by (project) (rate(container_fs_reads_bytes_total{project!=""}[5m]))
+              + sum by (project) (rate(container_fs_writes_bytes_total{project!=""}[5m]))
+
+      - record: rig:stack:containers
+        expr: count by (project) (container_last_seen{project!=""})
+
       # --- what the blocked threads are actually waiting on ---------------
       # wchan is the kernel function a thread is parked in. Under an IO stall
       # this reads like a stack trace for the whole machine.

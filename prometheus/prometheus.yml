@@ -53,3 +53,10 @@ scrape_configs:
       - source_labels: [__name__]
         regex: 'container_(tasks_state|memory_failures_total|fs_(sector|io_time|io_current|read_seconds|write_seconds)_.*)'
         action: drop
+      # Shorten the compose labels; nobody types the full form twice.
+      - source_labels: [container_label_com_docker_compose_project]
+        target_label: project
+      - source_labels: [container_label_com_docker_compose_service]
+        target_label: service
+      - regex: 'container_label_com_docker_compose_(project|service)'
+        action: labeldrop

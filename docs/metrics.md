@@ -93,7 +93,8 @@ meaningful next month.
 | `rig:proc:context_switches_per_sec` | Scheduling churn |
 | `rig:proc:count`, `:threads`, `:open_fds` | Cardinality. A build with unbounded parallelism shows up in `count` first. |
 | `rig:proc:wchan_threads` | Threads per kernel wait function. Under an IO stall this reads like a stack trace for the whole machine. |
-| `rig:container:cpu_cores`, `:rss_bytes`, `:io_bytes_per_sec` | Same, per container, keyed by `name` |
+| `rig:container:cpu_cores`, `:rss_bytes`, `:swap_bytes`, `:io_bytes_per_sec` | Same, per container, keyed by `name` |
+| `rig:stack:cpu_cores`, `:rss_bytes`, `:swap_bytes`, `:io_bytes_per_sec`, `:containers` | Per compose project, keyed by `project`. One `docker compose up` is one unit of intent; per-container numbers hide the cost of running several worktrees of the same stack at once. |
 
 ---
 
