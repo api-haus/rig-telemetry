@@ -1048,6 +1048,33 @@ def _ai_backfill_undo(args) -> int:
     return 0
 
 
+def _when(stamp: float) -> str:
+    return datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M")
+
+
+def _head_floor() -> tuple[float, str]:
+    """The oldest sample Prometheus still holds in memory, and nothing later.
+
+    Blocks are the persisted past; the head is the present, and it lives in
+    memory until Prometheus cuts a block from it. A backfilled block that
+    reaches into the head's range asserts that window is already on disk, so
+    the next restart truncates the head down to the newest block and throws
+    away live telemetry that had not been written yet.
+
+    That is not a hypothetical: an earlier version of this command wrote
+    samples right up to the moment it ran, and cost this stack two and a half
+    hours of every exporter's data.
+    """
+    try:
+        oldest = scalar("prometheus_tsdb_head_min_time_seconds")
+    except PromError:
+        oldest = None
+    if oldest:
+        return oldest, "the oldest sample Prometheus still holds in memory"
+    midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight.timestamp(), "the start of today — Prometheus did not answer"
+
+
 def cmd_ai_backfill(args) -> int:
     """Import the ledger's history into Prometheus as dated blocks.
 
@@ -1089,9 +1116,9 @@ def cmd_ai_backfill(args) -> int:
     for r in rows:
         by_day.setdefault(r["day"], []).append(r)
 
+    ceiling, why = _head_floor()
     running: dict[tuple, dict[str, float]] = {}
     lines = []
-    last = max(by_day)
     for day in sorted(by_day):
         for r in by_day[day]:
             key = tuple(r[c] for c in key_cols[1:])
@@ -1103,12 +1130,10 @@ def cmd_ai_backfill(args) -> int:
                 acc[f"tok_{role}"] += r[role]
                 acc[f"usd_{role}"] += r[role] * rates[role] / 1e6 if rates else 0.0
         midnight = int(datetime.strptime(day, "%Y-%m-%d").timestamp())
-        # The last day stops at the previous whole step, so the exporter's own
-        # samples are never overwritten by a flat carried-forward line.
-        end = min(86400, int(datetime.now(timezone.utc).timestamp()) - midnight) \
-            if day == last else 86400
-        for offset in range(0, max(0, end), step):
+        for offset in range(0, 86400, step):
             stamp = midnight + offset
+            if stamp >= ceiling:
+                break
             for key, acc in running.items():
                 tags = (f'{common},harness="{key[0]}",provider="{key[1]}",'
                         f'model="{key[2]}",kind="{key[3]}"')
@@ -1122,11 +1147,17 @@ def cmd_ai_backfill(args) -> int:
             "# TYPE aiusage_requests_total counter\n"
             "# TYPE aiusage_tokens_total counter\n"
             + "\n".join(lines) + "\n# EOF\n")
+    if not lines:
+        print(f"nothing to write: the ledger's history is newer than {_when(ceiling)}, "
+              f"which is {why}.")
+        return 0
     out = pathlib.Path(args.out or "/tmp/rig-ai-backfill.openmetrics")
     out.write_text(body)
     days = len(by_day)
     print(f"wrote {len(lines):,} samples ({out.stat().st_size / 1e6:.1f} MB) "
           f"over {days} days at {args.step} steps to {out}")
+    print(f"  stops at {_when(ceiling)} — {why}. Everything after that is the "
+          f"exporter's own to record.")
 
     if args.dry_run:
         print("\nimport them with:")

@@ -110,6 +110,25 @@ and a panel that fails to migrate shows as empty rather than as an error.
    `tools/rig` read that namespace, not raw exporter names.
 5. Document them in `docs/metrics.md`.
 
+## Never write blocks that reach into the head
+
+`promtool tsdb create-blocks-from` writes into the same directory Prometheus is
+serving from, and Prometheus trusts what it finds there. Blocks are the
+persisted past; the head is the present, held in memory until a block is cut
+from it. A block whose range overlaps the head asserts that window is already
+on disk, so the next restart truncates the head to the newest block and
+discards everything in memory that had not been written yet.
+
+Measured here, the hard way: an import that reached up to the present cost this
+stack two and a half hours of every exporter's data. Nothing recovers it.
+
+`rig ai backfill` now stops at `prometheus_tsdb_head_min_time_seconds` and says
+where it stopped. Any other backfill needs the same ceiling:
+
+```
+tools/rig q 'prometheus_tsdb_head_min_time_seconds'   # write nothing at or after this
+```
+
 ## Known quirks
 
 **Ports.** Everything binds loopback: Grafana **13337**, Prometheus 13390,

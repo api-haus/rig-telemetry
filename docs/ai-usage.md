@@ -237,6 +237,23 @@ The samples carry the scrape's own `job` and `instance` labels, read back from
 a live sample. Without them they would be different series and the two ranges
 would double each other where they meet.
 
+**The import stops before Prometheus's head, and this is not a nicety.** Blocks
+are the persisted past; the head is the present, and it lives in memory until
+Prometheus cuts a block from it. A backfilled block that reaches into the
+head's range asserts that window is already on disk, so the next restart
+truncates the head down to the newest block and discards live telemetry that
+had not been written yet.
+
+An earlier version of this command wrote samples right up to the moment it ran,
+to make the boundary look continuous. Prometheus restarted, set its head
+minimum to the newest backfilled block, and two and a half hours of every
+exporter's data — CPU, memory, disks, sensors, the lot — were gone. Data that
+exists only in the head cannot be recovered.
+
+So the ceiling is `prometheus_tsdb_head_min_time_seconds`, measured rather than
+assumed, and the command prints where it stopped. Everything after that is the
+exporter's own to record.
+
 `promtool tsdb create-blocks-from openmetrics` does the import. Prometheus
 needs a restart to notice new blocks, which the command does.
 
