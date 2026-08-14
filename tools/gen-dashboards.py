@@ -347,7 +347,8 @@ def storage():
     L.row("Now")
     stat(L, "Busiest disk", "max(rig:disk:util_ratio)", unit="percentunit",
          thresholds=steps(("yellow", 0.6), ("orange", 0.85), ("red", 0.95)))
-    stat(L, "Worst latency", "max(rig:disk:await_seconds)", unit="s",
+    stat(L, "Worst write latency", "max(rig:disk:write_await_seconds)", unit="s",
+         desc="Discards excluded — btrfs trims are large and asynchronous, and drag a blended figure up on a healthy drive.",
          thresholds=steps(("yellow", 0.01), ("orange", 0.05), ("red", 0.2)))
     stat(L, "Fullest filesystem", "max(rig:fs:used_ratio)", unit="percentunit",
          thresholds=steps(("yellow", 0.8), ("orange", 0.9), ("red", 0.95)))
@@ -360,8 +361,14 @@ def storage():
 
     L.row("IO")
     ts(L, "Disk busy", [("rig:disk:util_ratio", "{{device}}")], unit="percentunit", max_=1)
-    ts(L, "Request latency", [("rig:disk:await_seconds", "{{device}}")], unit="s",
-       desc="Time an average request waited. Tens of milliseconds on an NVMe means the queue is deep, not that the drive is slow.")
+    ts(L, "Latency by operation", [
+        ("rig:disk:read_await_seconds", "{{device}} read"),
+        ("rig:disk:write_await_seconds", "{{device}} write"),
+        ("rig:disk:discard_await_seconds", "{{device}} trim"),
+    ], unit="s",
+       desc=("Split the way iostat reports it. A blended figure hides a drive with fast reads and slow writes. "
+             "btrfs issues very large asynchronous discards, so the trim line sits seconds high on a healthy drive — "
+             "read and write are the ones to judge."))
     ts(L, "Read throughput", [("rig:disk:read_bytes_per_sec", "{{device}}")], unit="Bps")
     ts(L, "Write throughput", [("rig:disk:write_bytes_per_sec", "{{device}}")], unit="Bps")
     ts(L, "Swap traffic", [("rig:mem:swap_pages_per_sec", "pages/s")], unit="none",

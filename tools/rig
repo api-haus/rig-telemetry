@@ -439,10 +439,14 @@ def cmd_thermals(args) -> int:
 def cmd_disk(args) -> int:
     at = args.at
     util = dict(series("rig:disk:util_ratio", "device", at))
-    await_s = dict(series("rig:disk:await_seconds", "device", at))
+    r_aw = dict(series("rig:disk:read_await_seconds", "device", at))
+    w_aw = dict(series("rig:disk:write_await_seconds", "device", at))
+    d_aw = dict(series("rig:disk:discard_await_seconds", "device", at))
     rd = dict(series("rig:disk:read_bytes_per_sec", "device", at))
     wr = dict(series("rig:disk:write_bytes_per_sec", "device", at))
-    rows = [(d, pct(util.get(d)), f"{await_s.get(d, 0) * 1000:.1f}ms",
+    ms = lambda v: "-" if v is None else f"{v * 1000:.2f}ms"
+    rows = [(d, pct(util.get(d)),
+             ms(r_aw.get(d)), ms(w_aw.get(d)), ms(d_aw.get(d)),
              human_bytes(rd.get(d, 0)) + "/s", human_bytes(wr.get(d, 0)) + "/s")
             for d in sorted(util, key=lambda k: -util[k])]
 
@@ -471,7 +475,7 @@ def cmd_disk(args) -> int:
         print(json.dumps({"io": rows, "filesystems": fs_rows, "smart": smart_rows}, indent=2))
         return 0
     print(rule("io"))
-    print(table(rows, ("device", "busy", "await", "read", "write")))
+    print(table(rows, ("device", "busy", "r-await", "w-await", "trim-await", "read", "write")))
     print()
     print(rule("filesystems"))
     print(table(fs_rows, ("mount", "device", "used", "free", "other mounts")))

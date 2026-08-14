@@ -108,8 +108,8 @@
     },
     {
       "type": "stat",
-      "title": "Worst latency",
-      "description": "",
+      "title": "Worst write latency",
+      "description": "Discards excluded \u2014 btrfs trims are large and asynchronous, and drag a blended figure up on a healthy drive.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -117,7 +117,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(rig:disk:await_seconds)",
+          "expr": "max(rig:disk:write_await_seconds)",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -560,8 +560,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Request latency",
-      "description": "Time an average request waited. Tens of milliseconds on an NVMe means the queue is deep, not that the drive is slow.",
+      "title": "Latency by operation",
+      "description": "Split the way iostat reports it. A blended figure hides a drive with fast reads and slow writes. btrfs issues very large asynchronous discards, so the trim line sits seconds high on a healthy drive \u2014 read and write are the ones to judge.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -569,8 +569,30 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:disk:await_seconds",
-          "legendFormat": "{{device}}",
+          "expr": "rig:disk:read_await_seconds",
+          "legendFormat": "{{device}} read",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "rig:disk:write_await_seconds",
+          "legendFormat": "{{device}} write",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "rig:disk:discard_await_seconds",
+          "legendFormat": "{{device}} trim",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"

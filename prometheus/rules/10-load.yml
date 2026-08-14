@@ -86,14 +86,40 @@ groups:
       - record: rig:disk:write_bytes_per_sec
         expr: sum without (instance, job) (rate(node_disk_written_bytes_total[5m]))
 
+      # Per operation type, the way iostat reports it. A single blended figure
+      # hides the case that matters: a drive with fast reads and slow writes.
+      # `/ (x > 0)` drops the series when the drive is idle rather than
+      # dividing by a floor and inventing a latency.
+      - record: rig:disk:read_await_seconds
+        expr: |
+          rate(node_disk_read_time_seconds_total[5m])
+          / (rate(node_disk_reads_completed_total[5m]) > 0)
+
+      - record: rig:disk:write_await_seconds
+        expr: |
+          rate(node_disk_write_time_seconds_total[5m])
+          / (rate(node_disk_writes_completed_total[5m]) > 0)
+
+      - record: rig:disk:discard_await_seconds
+        expr: |
+          rate(node_disk_discard_time_seconds_total[5m])
+          / (rate(node_disk_discards_completed_total[5m]) > 0)
+
+      # Weighted io time counts discards and flushes too, so the denominator
+      # must as well — omitting them inflates the result on a filesystem that
+      # trims continuously.
       - record: rig:disk:await_seconds
         expr: |
-          sum without (instance, job) (
-            rate(node_disk_io_time_weighted_seconds_total[5m])
-            / clamp_min(
-                rate(node_disk_reads_completed_total[5m])
-                + rate(node_disk_writes_completed_total[5m]), 1)
-          )
+          rate(node_disk_io_time_weighted_seconds_total[5m])
+          / (
+              rate(node_disk_reads_completed_total[5m])
+              + rate(node_disk_writes_completed_total[5m])
+              + rate(node_disk_discards_completed_total[5m])
+              + rate(node_disk_flush_requests_total[5m])
+            > 0)
+
+      - record: rig:disk:queue_depth
+        expr: rate(node_disk_io_time_weighted_seconds_total[5m]) / clamp_min(rate(node_disk_io_time_seconds_total[5m]), 0.001)
 
       # --- filesystems (keeps `device` and `mountpoint`) ------------------
       # btrfs subvolumes and bind mounts put one device under many

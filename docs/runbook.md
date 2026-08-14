@@ -126,5 +126,15 @@ say so plainly, and `RigExporterDown` fires.
 under many mountpoints. Aggregate `by (device)`; `tools/rig disk` and the
 storage dashboard already do.
 
+**Disk latency is bursty over a 5-minute window.** `rig:disk:*_await_seconds`
+is a ratio of rates, so a two-second stall inside the window dominates the
+average. Cross-check a surprising figure against `iostat -x 2 2` before acting
+on it. The lifetime ratio agrees with iostat exactly:
+`node_disk_read_time_seconds_total / node_disk_reads_completed_total`.
+
+**Trim latency is high on healthy drives.** btrfs issues very large
+asynchronous discards; hundreds of milliseconds to tens of seconds there is
+normal. Judge a drive on read and write await.
+
 **`rig:proc:rss_bytes` can exceed physical memory.** It counts pages shared
 between forks once per fork. Use `rig:proc:rss_proportional_bytes`.
