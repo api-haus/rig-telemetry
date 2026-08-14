@@ -1,0 +1,113 @@
+# Layer 4 — cooling health. Method, assumptions and failure modes: docs/thermals.md.
+
+groups:
+
+  # --- instantaneous ------------------------------------------------------
+  - name: rig-thermal-live
+    interval: 15s
+    rules:
+
+      - record: rig:thermal:gpu_rise_c
+        expr: rig:gpu_celsius - rig:ambient_celsius
+
+      # Only meaningful when the GPU is actually dissipating heat.
+      - record: rig:thermal:gpu_resistance_c_per_w
+        expr: |
+          (
+            (rig:gpu_celsius - rig:ambient_celsius)
+            / clamp_min(rig:gpu_watts, 1)
+          )
+          and (rig:gpu_watts >= 60)
+
+      - record: rig:thermal:gpu_fan_ratio
+        expr: max(nvidia_smi_fan_speed_ratio)
+
+      # nvidia reports headroom, not a limit: this is degrees remaining before
+      # the card throttles. Small is bad.
+      - record: rig:thermal:gpu_headroom_c
+        expr: max(nvidia_smi_temperature_gpu_tlimit)
+
+      # Coolant above case air. The radiator's whole job is to make this
+      # small; dust makes it grow.
+      - record: rig:thermal:coolant_rise_c
+        expr: rig:coolant_in_celsius - rig:ambient_celsius
+
+      # Loop delta across the block. Tracks flow: a dying pump widens it.
+      - record: rig:thermal:coolant_delta_c
+        expr: abs(rig:coolant_out_celsius - rig:coolant_in_celsius)
+
+      # Die above coolant. Tracks the cold plate contact — dried paste or a
+      # loosened mount raises this while the radiator figure stays flat.
+      - record: rig:thermal:die_to_coolant_c
+        expr: rig:cpu_celsius - rig:coolant_in_celsius
+
+      # No package-power sensor on this k10temp, so busy ratio proxies heat.
+      # Arbitrary units, but comparable to its own past, which is the point.
+      - record: rig:thermal:cpu_resistance_index
+        expr: |
+          (
+            (rig:cpu_celsius - rig:ambient_celsius)
+            / clamp_min(rig:cpu:busy_ratio, 0.05)
+          )
+          and (rig:cpu:busy_ratio >= 0.5)
+
+      - record: rig:thermal:pump_rpm
+        expr: max(rig:fan_rpm{chip_name="asusec"})
+
+  # --- baselines ----------------------------------------------------------
+  # Two stages so the 7-day windows read 5-minute points, not 15-second ones.
+  - name: rig-thermal-baseline
+    interval: 5m
+    rules:
+
+      - record: rig:thermal:gpu_resistance_c_per_w:avg1h
+        expr: avg_over_time(rig:thermal:gpu_resistance_c_per_w[1h])
+
+      - record: rig:thermal:coolant_rise_c:avg1h
+        expr: avg_over_time(rig:thermal:coolant_rise_c[1h])
+
+      - record: rig:thermal:cpu_resistance_index:avg1h
+        expr: avg_over_time(rig:thermal:cpu_resistance_index[1h])
+
+      - record: rig:thermal:die_to_coolant_c:avg1h
+        expr: avg_over_time(rig:thermal:die_to_coolant_c[1h])
+
+      - record: rig:thermal:gpu_resistance_c_per_w:avg7d
+        expr: avg_over_time(rig:thermal:gpu_resistance_c_per_w:avg1h[7d])
+
+      - record: rig:thermal:coolant_rise_c:avg7d
+        expr: avg_over_time(rig:thermal:coolant_rise_c:avg1h[7d])
+
+      - record: rig:thermal:cpu_resistance_index:avg7d
+        expr: avg_over_time(rig:thermal:cpu_resistance_index:avg1h[7d])
+
+      - record: rig:thermal:die_to_coolant_c:avg7d
+        expr: avg_over_time(rig:thermal:die_to_coolant_c:avg1h[7d])
+
+  # --- degradation --------------------------------------------------------
+  # This week against the same week a month ago. Above 1.0 means the cooling
+  # path removes heat worse than it used to. Needs 37 days of history before
+  # it says anything; until then the series is simply absent.
+  - name: rig-thermal-degradation
+    interval: 30m
+    rules:
+
+      - record: rig:thermal:gpu_degradation_ratio
+        expr: |
+          rig:thermal:gpu_resistance_c_per_w:avg7d
+          / (rig:thermal:gpu_resistance_c_per_w:avg7d offset 30d)
+
+      - record: rig:thermal:radiator_degradation_ratio
+        expr: |
+          rig:thermal:coolant_rise_c:avg7d
+          / (rig:thermal:coolant_rise_c:avg7d offset 30d)
+
+      - record: rig:thermal:cpu_degradation_ratio
+        expr: |
+          rig:thermal:cpu_resistance_index:avg7d
+          / (rig:thermal:cpu_resistance_index:avg7d offset 30d)
+
+      - record: rig:thermal:mount_degradation_ratio
+        expr: |
+          rig:thermal:die_to_coolant_c:avg7d
+          / (rig:thermal:die_to_coolant_c:avg7d offset 30d)

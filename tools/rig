@@ -1,0 +1,664 @@
+#!/usr/bin/env python3
+"""rig — read the telemetry stack from a terminal or an agent.
+
+Every subcommand takes --json for machine consumption and --at/--since to ask
+about the past instead of now. Python standard library only, on purpose: this
+has to keep working when the thing it is diagnosing is broken.
+
+See AGENTS.md for the query vocabulary.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+PROM = os.environ.get("RIG_PROMETHEUS", "http://127.0.0.1:13390")
+TIMEOUT = float(os.environ.get("RIG_TIMEOUT", "30"))
+
+UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "y": 31536000}
+
+
+# --------------------------------------------------------------------------
+# prometheus access
+# --------------------------------------------------------------------------
+
+class PromError(RuntimeError):
+    pass
+
+
+def _call(path: str, params: dict, method: str = "POST") -> dict:
+    url = f"{PROM}/api/v1/{path}"
+    if method == "GET":
+        req = urllib.request.Request(f"{url}?{urllib.parse.urlencode(params)}")
+    else:
+        req = urllib.request.Request(url, data=urllib.parse.urlencode(params).encode(), method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            body = json.load(r)
+    except urllib.error.HTTPError as e:
+        raise PromError(f"{e.code} from {url}: {e.read()[:400].decode(errors='replace')}") from e
+    except urllib.error.URLError as e:
+        raise PromError(f"cannot reach Prometheus at {PROM}: {e.reason}. Is the stack up? `docker compose ps`") from e
+    if body.get("status") != "success":
+        raise PromError(f"{body.get('errorType')}: {body.get('error')}")
+    return body["data"]
+
+
+def query(expr: str, at: str | None = None) -> list[dict]:
+    params = {"query": expr}
+    if at:
+        params["time"] = at
+    return _call("query", params)["result"]
+
+
+def query_range(expr: str, start: str, end: str, step: str) -> list[dict]:
+    return _call("query_range", {"query": expr, "start": start, "end": end, "step": step})["result"]
+
+
+def scalar(expr: str, at: str | None = None, default=None):
+    """First sample of an instant query, as a float."""
+    res = query(expr, at)
+    if not res:
+        return default
+    try:
+        return float(res[0]["value"][1])
+    except (KeyError, IndexError, ValueError):
+        return default
+
+
+def series(expr: str, label: str, at: str | None = None) -> list[tuple[str, float]]:
+    """Instant query flattened to (label_value, value), largest first."""
+    out = []
+    for s in query(expr, at):
+        name = s["metric"].get(label) or s["metric"].get("__name__") or "?"
+        try:
+            out.append((name, float(s["value"][1])))
+        except (KeyError, IndexError, ValueError):
+            continue
+    return sorted(out, key=lambda kv: kv[1], reverse=True)
+
+
+# --------------------------------------------------------------------------
+# formatting
+# --------------------------------------------------------------------------
+
+def human_bytes(n: float | None) -> str:
+    if n is None:
+        return "n/a"
+    for unit in ("B", "K", "M", "G", "T", "P"):
+        if abs(n) < 1024:
+            return f"{n:.1f}{unit}" if unit != "B" else f"{n:.0f}B"
+        n /= 1024
+    return f"{n:.1f}E"
+
+
+def num(v, fmt="{:.2f}", dash="n/a") -> str:
+    return dash if v is None else fmt.format(v)
+
+
+def pct(v) -> str:
+    return "n/a" if v is None else f"{v * 100:.1f}%"
+
+
+def rule(title: str = "", width: int = 74) -> str:
+    if not title:
+        return "-" * width
+    return f"-- {title} " + "-" * max(0, width - len(title) - 4)
+
+
+def table(rows: list[tuple], headers: tuple, indent: str = "  ") -> str:
+    if not rows:
+        return indent + "(nothing)"
+    cols = list(zip(*([headers] + [tuple(str(c) for c in r) for r in rows])))
+    widths = [max(len(str(c)) for c in col) for col in cols]
+    out = [indent + "  ".join(str(h).ljust(w) for h, w in zip(headers, widths)).rstrip()]
+    out.append(indent + "  ".join("-" * w for w in widths))
+    for r in rows:
+        out.append(indent + "  ".join(str(c).ljust(w) for c, w in zip(r, widths)).rstrip())
+    return "\n".join(out)
+
+
+def parse_duration(text: str) -> timedelta:
+    text = text.strip()
+    if text and text[-1] in UNITS and text[:-1].replace(".", "", 1).isdigit():
+        return timedelta(seconds=float(text[:-1]) * UNITS[text[-1]])
+    raise SystemExit(f"rig: bad duration {text!r}; use 30m, 6h, 7d, 2w")
+
+
+def window(args) -> tuple[str, str, str]:
+    """(start, end, step) as RFC3339 strings for the range API."""
+    end = datetime.fromisoformat(args.at.replace("Z", "+00:00")) if getattr(args, "at", None) \
+        else datetime.now(timezone.utc)
+    span = parse_duration(args.since)
+    start = end - span
+    step = getattr(args, "step", None) or f"{max(15, int(span.total_seconds() // 400))}s"
+    return start.isoformat(), end.isoformat(), step
+
+
+# --------------------------------------------------------------------------
+# rig why — the one-shot verdict
+# --------------------------------------------------------------------------
+
+def cmd_why(args) -> int:
+    at = args.at
+    f = {
+        "load1": scalar("max(node_load1)", at),
+        "load_per_cpu": scalar("rig:load:per_cpu", at),
+        "runnable": scalar("rig:load:runnable", at),
+        "blocked": scalar("rig:load:blocked", at),
+        "io_bound": scalar("rig:load:io_bound_ratio", at),
+        "cpu_busy": scalar("rig:cpu:busy_ratio", at),
+        "cpu_iowait": scalar("rig:cpu:iowait_ratio", at),
+        "psi_cpu": scalar("rig:psi:cpu_some", at),
+        "psi_io_some": scalar("rig:psi:io_some", at),
+        "psi_io_full": scalar("rig:psi:io_full", at),
+        "psi_mem_full": scalar("rig:psi:memory_full", at),
+        "mem_used": scalar("rig:mem:used_ratio", at),
+        "swap_used": scalar("rig:mem:swap_used_bytes", at),
+        "swap_rate": scalar("rig:mem:swap_pages_per_sec", at),
+        "cpu_c": scalar("rig:cpu_celsius", at),
+        "gpu_c": scalar("rig:gpu_celsius", at),
+        "gpu_headroom": scalar("rig:thermal:gpu_headroom_c", at),
+    }
+
+    verdict, because = classify(f)
+
+    tops = {
+        "blocked": series("topk(5, rig:proc:blocked > 0)", "groupname", at),
+        "cpu": series("topk(5, rig:proc:cpu_cores > 0.05)", "groupname", at),
+        "faults": series("topk(5, rig:proc:major_faults_per_sec > 1)", "groupname", at),
+        "io": series("topk(5, rig:proc:io_bytes_per_sec > 0)", "groupname", at),
+        "rss": series("topk(5, rig:proc:rss_proportional_bytes)", "groupname", at),
+        "swap": series("topk(5, rig:proc:swap_bytes > 0)", "groupname", at),
+    }
+    disk = series("topk(4, rig:disk:util_ratio > 0.01)", "device", at)
+    firing = series('ALERTS{alertstate="firing"}', "alertname", at)
+
+    if args.json:
+        print(json.dumps({"verdict": verdict, "because": because, "facts": f,
+                          "top": tops, "disk_util": disk,
+                          "firing": [a for a, _ in firing]}, indent=2))
+        return 0
+
+    print(f"VERDICT: {verdict}")
+    for line in because:
+        print(f"         {line}")
+    print()
+    print(rule("load"))
+    print(f"  load1 {num(f['load1'], '{:.0f}')} ({num(f['load_per_cpu'], '{:.1f}')}x cores)"
+          f"   runnable {num(f['runnable'], '{:.0f}')}   blocked-on-io {num(f['blocked'], '{:.0f}')}")
+    print(f"  cpu busy {pct(f['cpu_busy'])}   iowait {pct(f['cpu_iowait'])}")
+    print(f"  stalled: cpu {pct(f['psi_cpu'])}   io-some {pct(f['psi_io_some'])}   "
+          f"io-ALL {pct(f['psi_io_full'])}   mem-ALL {pct(f['psi_mem_full'])}")
+    print(f"  memory {pct(f['mem_used'])} used, swap {human_bytes(f['swap_used'])}, "
+          f"{num(f['swap_rate'], '{:.0f}')} pages/s through swap")
+    print()
+    for key, title, fmt in (
+        ("blocked", "who is blocked on io (procs)", "{:.0f}"),
+        ("cpu", "who is using cpu (cores)", "{:.2f}"),
+        ("faults", "who is paging from disk (faults/s)", "{:.0f}"),
+        ("io", "who is doing io (bytes/s)", None),
+        ("rss", "who holds memory (proportional)", None),
+        ("swap", "who is swapped out", None),
+    ):
+        rows = [(n, human_bytes(v) if fmt is None else fmt.format(v)) for n, v in tops[key]]
+        print(rule(title))
+        print(table(rows, ("group", "value")))
+        print()
+    print(rule("disk"))
+    print(table([(d, pct(v)) for d, v in disk], ("device", "busy")))
+    print()
+    print(rule("thermal"))
+    print(f"  cpu {num(f['cpu_c'], '{:.0f}')}C   gpu {num(f['gpu_c'], '{:.0f}')}C"
+          f"   gpu headroom to throttle {num(f['gpu_headroom'], '{:.0f}')}C")
+    print()
+    print(rule("firing alerts"))
+    print(table([(a,) for a, _ in firing] or [], ("alert",)))
+    return 0
+
+
+def classify(f: dict) -> tuple[str, list[str]]:
+    """Name the bottleneck. Order matters: memory thrash masquerades as IO."""
+    io_full = f["psi_io_full"] or 0
+    mem_full = f["psi_mem_full"] or 0
+    swap_rate = f["swap_rate"] or 0
+    cpu_busy = f["cpu_busy"] or 0
+    psi_cpu = f["psi_cpu"] or 0
+    load_pc = f["load_per_cpu"] or 0
+    io_bound = f["io_bound"] or 0
+
+    if io_full > 0.3 and swap_rate > 2000:
+        return "MEMORY THRASH — swap is eating the disk", [
+            f"the whole machine is stalled on io {io_full * 100:.0f}% of the time,",
+            f"and {swap_rate:.0f} pages/s are moving through swap.",
+            "the disk is busy serving memory, not work. cpu is a red herring.",
+            "-> topk(5, rig:proc:major_faults_per_sec) names the process paying for it.",
+        ]
+    if io_full > 0.3:
+        return "IO STALL — everything is queued behind a disk", [
+            f"the whole machine is stalled on io {io_full * 100:.0f}% of the time.",
+            f"load is {load_pc:.1f}x cores and {io_bound * 100:.0f}% of it is blocked, not running.",
+            "-> topk(5, rig:proc:blocked) names who is in the queue.",
+        ]
+    if mem_full > 0.2:
+        return "MEMORY PRESSURE — reclaim is stalling work", [
+            f"tasks stalled on memory reclaim {mem_full * 100:.0f}% of the time.",
+            "-> topk(5, rig:proc:rss_proportional_bytes)",
+        ]
+    if cpu_busy > 0.9 and psi_cpu > 0.4:
+        return "CPU SATURATED — more runnable work than cores", [
+            f"cpu is {cpu_busy * 100:.0f}% busy and tasks queue for it {psi_cpu * 100:.0f}% of the time.",
+            "-> topk(5, rig:proc:cpu_cores)",
+        ]
+    if load_pc > 2 and io_bound > 0.7:
+        return "IO BOUND — load is high but the cpu is idle", [
+            f"load {load_pc:.1f}x cores, {io_bound * 100:.0f}% of it blocked on io.",
+            "this load average is not a cpu problem.",
+        ]
+    if cpu_busy > 0.8:
+        return "BUSY — cpu working, nothing queueing badly", [
+            f"cpu {cpu_busy * 100:.0f}% busy, no significant stall.",
+        ]
+    return "HEALTHY — nothing is saturated", [
+        f"load {load_pc:.1f}x cores, cpu {cpu_busy * 100:.0f}% busy, io stall {io_full * 100:.0f}%.",
+    ]
+
+
+# --------------------------------------------------------------------------
+# rig who — attribution
+# --------------------------------------------------------------------------
+
+BY = {
+    "cpu": ("rig:proc:cpu_cores", "cores", "{:.2f}"),
+    "blocked": ("rig:proc:blocked", "procs blocked on io", "{:.0f}"),
+    "running": ("rig:proc:running", "procs running", "{:.0f}"),
+    "mem": ("rig:proc:rss_proportional_bytes", "resident (proportional)", None),
+    "rss": ("rig:proc:rss_bytes", "resident (counts shared twice)", None),
+    "swap": ("rig:proc:swap_bytes", "swapped out", None),
+    "io": ("rig:proc:io_bytes_per_sec", "bytes/s read+written", None),
+    "read": ("rig:proc:read_bytes_per_sec", "bytes/s read", None),
+    "write": ("rig:proc:write_bytes_per_sec", "bytes/s written", None),
+    "faults": ("rig:proc:major_faults_per_sec", "major faults/s (paging from disk)", "{:.1f}"),
+    "procs": ("rig:proc:count", "process count", "{:.0f}"),
+    "threads": ("rig:proc:threads", "thread count", "{:.0f}"),
+    "fds": ("rig:proc:open_fds", "open file descriptors", "{:.0f}"),
+    "switches": ("rig:proc:context_switches_per_sec", "context switches/s", "{:.0f}"),
+}
+
+
+def cmd_who(args) -> int:
+    metric, unit, fmt = BY[args.by]
+    if args.since:
+        span = args.since
+        expr = f"topk({args.top}, {args.agg}_over_time({metric}[{span}]))"
+        header = f"top {args.top} by {args.by} — {args.agg} over the last {span}"
+    else:
+        expr = f"topk({args.top}, {metric})"
+        header = f"top {args.top} by {args.by} — now"
+    rows = series(expr, "groupname", args.at)
+
+    if args.json:
+        print(json.dumps({"metric": metric, "unit": unit, "expr": expr,
+                          "rows": [{"group": g, "value": v} for g, v in rows]}, indent=2))
+        return 0
+
+    print(header)
+    print(f"  ({metric}, {unit})\n")
+    print(table([(g, human_bytes(v) if fmt is None else fmt.format(v)) for g, v in rows],
+                ("group", "value")))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# rig timeline — when did it go wrong, and who owned it
+# --------------------------------------------------------------------------
+
+def cmd_timeline(args) -> int:
+    start, end, step = window(args)
+    metric, _, fmt = BY[args.by]
+    load = query_range("rig:load:per_cpu", start, end, step)
+    stall = query_range("rig:psi:io_full", start, end, step)
+    top = query_range(f"topk({args.top}, {args.agg}_over_time({metric}[{step}]))", start, end, step)
+
+    load_pts = {int(float(t)): v for t, v in (load[0]["values"] if load else [])}
+    stall_pts = {int(float(t)): v for t, v in (stall[0]["values"] if stall else [])}
+    owners: dict[int, list[tuple[str, float]]] = {}
+    for s in top:
+        g = s["metric"].get("groupname", "?")
+        for t, v in s["values"]:
+            owners.setdefault(int(float(t)), []).append((g, float(v)))
+
+    rows = []
+    for t in sorted(load_pts):
+        lv = float(load_pts[t])
+        if args.min_load and lv < args.min_load:
+            continue
+        who = sorted(owners.get(t, []), key=lambda kv: kv[1], reverse=True)[:args.show]
+        rows.append((
+            datetime.fromtimestamp(t, timezone.utc).astimezone().strftime("%m-%d %H:%M"),
+            f"{lv:.1f}x",
+            f"{float(stall_pts.get(t, 0)) * 100:.0f}%",
+            ", ".join(f"{g} {human_bytes(v) if fmt is None else fmt.format(v)}" for g, v in who) or "-",
+        ))
+
+    if args.json:
+        print(json.dumps([dict(zip(("time", "load_per_cpu", "io_stall", "top"), r)) for r in rows], indent=2))
+        return 0
+
+    print(f"load and its owners, {args.since} back, {step} buckets, ranked by {args.by}")
+    if args.min_load:
+        print(f"(only buckets where load >= {args.min_load}x cores)")
+    print()
+    print(table(rows, ("time", "load", "io-stall", f"top {args.show} by {args.by}")))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# rig thermals
+# --------------------------------------------------------------------------
+
+def cmd_thermals(args) -> int:
+    at = args.at
+    temps = series("rig:temp_celsius", "label", at)
+    named = []
+    for s in query("rig:temp_celsius", at):
+        m = s["metric"]
+        named.append((m.get("chip_name", "?"), m.get("label") or m.get("sensor", "?"),
+                      float(s["value"][1])))
+    named.sort(key=lambda r: (-r[2], r[0]))
+
+    health = {
+        "ambient_c": scalar("rig:ambient_celsius", at),
+        "cpu_c": scalar("rig:cpu_celsius", at),
+        "gpu_c": scalar("rig:gpu_celsius", at),
+        "gpu_w": scalar("rig:gpu_watts", at),
+        "gpu_fan": scalar("rig:thermal:gpu_fan_ratio", at),
+        "gpu_headroom_c": scalar("rig:thermal:gpu_headroom_c", at),
+        "pump_rpm": scalar("rig:thermal:pump_rpm", at),
+        "coolant_rise_c": scalar("rig:thermal:coolant_rise_c", at),
+        "coolant_delta_c": scalar("rig:thermal:coolant_delta_c", at),
+        "die_to_coolant_c": scalar("rig:thermal:die_to_coolant_c", at),
+        "gpu_resistance": scalar("rig:thermal:gpu_resistance_c_per_w", at),
+    }
+    degradation = {
+        "gpu cooler (dust)": ("rig:thermal:gpu_degradation_ratio", 1.15),
+        "radiator (dust)": ("rig:thermal:radiator_degradation_ratio", 1.20),
+        "cpu path overall": ("rig:thermal:cpu_degradation_ratio", 1.20),
+        "cold plate / paste": ("rig:thermal:mount_degradation_ratio", 1.20),
+    }
+    deg_rows, deg_json = [], {}
+    for name, (expr, threshold) in degradation.items():
+        v = scalar(expr, at)
+        deg_json[name] = v
+        if v is None:
+            deg_rows.append((name, "no baseline yet", "needs 37d of history"))
+        else:
+            worse = (v - 1) * 100
+            deg_rows.append((name, f"{worse:+.1f}%",
+                             "CLEAN IT" if v > threshold else "ok"))
+
+    if args.json:
+        print(json.dumps({"health": health, "degradation": deg_json,
+                          "sensors": [{"chip": c, "sensor": s, "celsius": v} for c, s, v in named]},
+                         indent=2))
+        return 0
+
+    print(rule("now"))
+    print(f"  case air (reference) {num(health['ambient_c'], '{:.0f}')}C")
+    print(f"  cpu {num(health['cpu_c'], '{:.0f}')}C"
+          f"   = {num(health['die_to_coolant_c'], '{:.0f}')}C over coolant (mount)"
+          f" + {num(health['coolant_rise_c'], '{:.0f}')}C over air (radiator)")
+    print(f"  loop delta {num(health['coolant_delta_c'], '{:.1f}')}C"
+          f"   pump/fan {num(health['pump_rpm'], '{:.0f}')} rpm")
+    print(f"  gpu {num(health['gpu_c'], '{:.0f}')}C at {num(health['gpu_w'], '{:.0f}')}W,"
+          f" fan {pct(health['gpu_fan'])}, {num(health['gpu_headroom_c'], '{:.0f}')}C from throttling")
+    if health["gpu_resistance"] is not None:
+        print(f"  gpu thermal resistance {health['gpu_resistance']:.3f} C/W")
+    else:
+        print("  gpu thermal resistance: idle (needs >=60W to measure)")
+    print()
+    print(rule("cooling vs. one month ago"))
+    print(table(deg_rows, ("path", "change", "verdict")))
+    print()
+    print(rule("all sensors"))
+    print(table([(c, s, f"{v:.1f}C") for c, s, v in named], ("chip", "sensor", "temp")))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# rig disk / alerts / health
+# --------------------------------------------------------------------------
+
+def cmd_disk(args) -> int:
+    at = args.at
+    util = dict(series("rig:disk:util_ratio", "device", at))
+    await_s = dict(series("rig:disk:await_seconds", "device", at))
+    rd = dict(series("rig:disk:read_bytes_per_sec", "device", at))
+    wr = dict(series("rig:disk:write_bytes_per_sec", "device", at))
+    rows = [(d, pct(util.get(d)), f"{await_s.get(d, 0) * 1000:.1f}ms",
+             human_bytes(rd.get(d, 0)) + "/s", human_bytes(wr.get(d, 0)) + "/s")
+            for d in sorted(util, key=lambda k: -util[k])]
+
+    # One device shows up under every subvolume and bind mount it carries.
+    # Collapse to one row per device, named by its shortest mountpoint.
+    by_dev: dict[str, tuple[str, float, int]] = {}
+    for s in query("rig:fs:used_ratio", at):
+        dev = s["metric"].get("device", "?")
+        mp = s["metric"].get("mountpoint", "?")
+        prev = by_dev.get(dev)
+        aliases = (prev[2] if prev else 0) + 1
+        if prev is None or len(mp) < len(prev[0]):
+            by_dev[dev] = (mp, float(s["value"][1]), aliases)
+        else:
+            by_dev[dev] = (prev[0], prev[1], aliases)
+    avail = {s["metric"].get("device", "?"): float(s["value"][1]) for s in query("rig:fs:avail_bytes", at)}
+    fs_rows = [(mp, dev, pct(v), human_bytes(avail.get(dev)), n - 1)
+               for dev, (mp, v, n) in sorted(by_dev.items(), key=lambda kv: -kv[1][1])]
+
+    wear = [(s["metric"].get("device", "?"), float(s["value"][1])) for s in query("smartctl_device_percentage_used", at)]
+    temp = {s["metric"].get("device", "?"): float(s["value"][1]) for s in query("smartctl_device_temperature", at)}
+    err = {s["metric"].get("device", "?"): float(s["value"][1]) for s in query("smartctl_device_media_errors", at)}
+    smart_rows = [(d, f"{v:.0f}%", f"{temp.get(d, 0):.0f}C", f"{err.get(d, 0):.0f}") for d, v in wear]
+
+    if args.json:
+        print(json.dumps({"io": rows, "filesystems": fs_rows, "smart": smart_rows}, indent=2))
+        return 0
+    print(rule("io"))
+    print(table(rows, ("device", "busy", "await", "read", "write")))
+    print()
+    print(rule("filesystems"))
+    print(table(fs_rows, ("mount", "device", "used", "free", "other mounts")))
+    print()
+    print(rule("smart"))
+    print(table(smart_rows, ("device", "wear", "temp", "media errors")))
+    return 0
+
+
+def cmd_alerts(args) -> int:
+    data = _call("query", {"query": 'ALERTS{alertstate=~"firing|pending"}'})["result"]
+    fixed = {"__name__", "alertname", "alertstate", "severity", "domain", "action", "host", "instance", "job"}
+    rows = []
+    for s in data:
+        m = s["metric"]
+        subject = ",".join(f"{v}" for k, v in sorted(m.items()) if k not in fixed) or "-"
+        rows.append((m.get("alertname", "?"), m.get("alertstate", "?"),
+                     m.get("severity", "-"), m.get("domain", "-"), subject))
+    rows = sorted(set(rows), key=lambda r: (r[1] != "firing", r[2] != "critical", r[0]))
+    if args.json:
+        print(json.dumps([dict(zip(("alert", "state", "severity", "domain", "subject"), r)) for r in rows], indent=2))
+        return 0
+    print(table(rows, ("alert", "state", "severity", "domain", "subject")) if rows else "  nothing firing")
+    return 0
+
+
+def cmd_health(args) -> int:
+    targets = _call("query", {"query": "up"})["result"]
+    trows = [(s["metric"].get("job", "?"), "up" if float(s["value"][1]) else "DOWN") for s in targets]
+    trows.sort()
+    with urllib.request.urlopen(f"{PROM}/api/v1/rules", timeout=TIMEOUT) as r:
+        groups = json.load(r)["data"]["groups"]
+    bad = [(rl["name"], rl.get("lastError", "")) for g in groups for rl in g["rules"]
+           if rl.get("health") == "err"]
+    pending = sum(1 for g in groups for rl in g["rules"] if rl.get("health") == "unknown")
+    samples = scalar("prometheus_tsdb_head_samples_appended_total")
+    sser = scalar("prometheus_tsdb_head_series")
+    oldest = scalar("(time() - (prometheus_tsdb_lowest_timestamp / 1000)) / 86400")
+
+    if args.json:
+        print(json.dumps({"targets": trows, "rule_errors": bad, "rules_not_yet_evaluated": pending,
+                          "head_series": sser, "history_days": oldest}, indent=2))
+        return 0
+    print(rule("scrape targets"))
+    print(table(trows, ("job", "state")))
+    print()
+    print(rule("rules"))
+    print(f"  {sum(len(g['rules']) for g in groups)} rules, {len(bad)} failing, "
+          f"{pending} not yet evaluated (slow groups)")
+    for n, e in bad:
+        print(f"  ERR {n}: {e}")
+    print()
+    print(rule("storage"))
+    print(f"  {num(sser, '{:.0f}')} active series, {num(oldest, '{:.1f}')} days of history retained")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# rig q / range / metrics
+# --------------------------------------------------------------------------
+
+def cmd_q(args) -> int:
+    res = query(args.expr, args.at)
+    if args.json:
+        print(json.dumps(res, indent=2))
+        return 0
+    if not res:
+        print("  (empty result)")
+        return 0
+    keys = sorted({k for s in res for k in s["metric"] if k != "__name__"})
+    rows = [tuple([s["metric"].get(k, "") for k in keys] + [s["value"][1]]) for s in res]
+    rows.sort(key=lambda r: -float(r[-1]) if r[-1] not in ("NaN", "+Inf", "-Inf") else 0)
+    print(table(rows[:args.top], tuple(keys + ["value"])))
+    if len(rows) > args.top:
+        print(f"  ... {len(rows) - args.top} more (raise --top)")
+    return 0
+
+
+def cmd_range(args) -> int:
+    start, end, step = window(args)
+    res = query_range(args.expr, start, end, step)
+    if args.json:
+        print(json.dumps(res, indent=2))
+        return 0
+    for s in res:
+        label = ",".join(f"{k}={v}" for k, v in sorted(s["metric"].items()) if k != "__name__") or "value"
+        vals = [float(v) for _, v in s["values"]]
+        if not vals:
+            continue
+        print(f"{label}")
+        print(f"  min {min(vals):.4g}   avg {sum(vals) / len(vals):.4g}   max {max(vals):.4g}   "
+              f"last {vals[-1]:.4g}   n={len(vals)}")
+        if args.plot:
+            print("  " + sparkline(vals))
+    return 0
+
+
+def sparkline(vals: list[float], width: int = 60) -> str:
+    blocks = " ▁▂▃▄▅▆▇█"
+    if len(vals) > width:
+        bucket = len(vals) / width
+        vals = [max(vals[int(i * bucket):int((i + 1) * bucket)] or [0]) for i in range(width)]
+    lo, hi = min(vals), max(vals)
+    if hi == lo:
+        return blocks[1] * len(vals)
+    return "".join(blocks[min(8, int((v - lo) / (hi - lo) * 8) + 1)] for v in vals)
+
+
+def cmd_metrics(args) -> int:
+    names = _call("label/__name__/values", {}, method="GET")
+    pat = args.pattern
+    hits = sorted(n for n in names if (pat in n if pat else n.startswith("rig:")))
+    if args.json:
+        print(json.dumps(hits, indent=2))
+        return 0
+    for n in hits:
+        print(n)
+    print(f"\n{len(hits)} series names" + (f" matching {pat!r}" if pat else " in the rig: namespace"))
+    return 0
+
+
+# --------------------------------------------------------------------------
+
+def main() -> int:
+    p = argparse.ArgumentParser(prog="rig", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.add_argument("--at", metavar="RFC3339", help="evaluate at a past instant, e.g. 2026-08-14T03:00:00Z")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("why", help="one-shot verdict: what is wrong right now")
+    s.set_defaults(fn=cmd_why)
+
+    s = sub.add_parser("who", help="rank process groups by resource use")
+    s.add_argument("--by", choices=sorted(BY), default="cpu")
+    s.add_argument("--top", type=int, default=12)
+    s.add_argument("--since", metavar="DUR", help="aggregate over a window instead of now, e.g. 24h")
+    s.add_argument("--agg", choices=["avg", "max", "min"], default="max")
+    s.set_defaults(fn=cmd_who)
+
+    s = sub.add_parser("timeline", help="load over time with the group that owned it")
+    s.add_argument("--since", metavar="DUR", default="6h")
+    s.add_argument("--step", metavar="DUR")
+    s.add_argument("--by", choices=sorted(BY), default="cpu")
+    s.add_argument("--agg", choices=["avg", "max"], default="max")
+    s.add_argument("--top", type=int, default=3, help="groups to rank per bucket")
+    s.add_argument("--show", type=int, default=3, help="groups to print per bucket")
+    s.add_argument("--min-load", type=float, default=0.0, help="hide quiet buckets below this load-per-core")
+    s.set_defaults(fn=cmd_timeline)
+
+    s = sub.add_parser("thermals", help="temperatures and cooling degradation vs baseline")
+    s.set_defaults(fn=cmd_thermals)
+
+    s = sub.add_parser("disk", help="io, filesystems and SMART wear")
+    s.set_defaults(fn=cmd_disk)
+
+    s = sub.add_parser("alerts", help="what is firing")
+    s.set_defaults(fn=cmd_alerts)
+
+    s = sub.add_parser("health", help="is this stack itself working")
+    s.set_defaults(fn=cmd_health)
+
+    s = sub.add_parser("q", help="instant PromQL query")
+    s.add_argument("expr")
+    s.add_argument("--top", type=int, default=25)
+    s.set_defaults(fn=cmd_q)
+
+    s = sub.add_parser("range", help="range PromQL query, summarised")
+    s.add_argument("expr")
+    s.add_argument("--since", metavar="DUR", default="6h")
+    s.add_argument("--step", metavar="DUR")
+    s.add_argument("--plot", action="store_true", help="draw a sparkline")
+    s.set_defaults(fn=cmd_range)
+
+    s = sub.add_parser("metrics", help="list series names, rig: namespace by default")
+    s.add_argument("pattern", nargs="?")
+    s.set_defaults(fn=cmd_metrics)
+
+    args = p.parse_args()
+    try:
+        return args.fn(args)
+    except PromError as e:
+        print(f"rig: {e}", file=sys.stderr)
+        return 2
+    except BrokenPipeError:
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

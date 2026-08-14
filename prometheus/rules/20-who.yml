@@ -1,0 +1,91 @@
+# Layer 3 — attribution. Keyed by `groupname`, defined in process-exporter/config.yml.
+
+groups:
+
+  - name: rig-who
+    interval: 15s
+    rules:
+
+      # Cores consumed, not a percentage: 4.0 means four cores held solid.
+      - record: rig:proc:cpu_cores
+        expr: sum without (mode) (rate(namedprocess_namegroup_cpu_seconds_total[5m]))
+
+      # Processes in uninterruptible sleep, per group. This is the load
+      # average broken down by culprit — the single most useful series here.
+      - record: rig:proc:blocked
+        expr: sum without (state) (namedprocess_namegroup_states{state="Waiting"})
+
+      - record: rig:proc:running
+        expr: sum without (state) (namedprocess_namegroup_states{state="Running"})
+
+      - record: rig:proc:zombies
+        expr: sum without (state) (namedprocess_namegroup_states{state="Zombie"})
+
+      # Share of the load average owned by one group.
+      - record: rig:proc:load_share
+        expr: |
+          (
+            sum without (state) (namedprocess_namegroup_states{state="Waiting"})
+            + sum without (state) (namedprocess_namegroup_states{state="Running"})
+          )
+          / scalar(clamp_min(node_load1, 1))
+
+      - record: rig:proc:count
+        expr: namedprocess_namegroup_num_procs
+
+      - record: rig:proc:threads
+        expr: namedprocess_namegroup_num_threads
+
+      # `resident` double-counts pages shared between forks of the same build;
+      # `proportional` divides them. Keep both: resident answers "how much did
+      # this group ask for", proportional answers "how much is really theirs".
+      - record: rig:proc:rss_bytes
+        expr: sum without (memtype) (namedprocess_namegroup_memory_bytes{memtype="resident"})
+
+      - record: rig:proc:rss_proportional_bytes
+        expr: sum without (memtype) (namedprocess_namegroup_memory_bytes{memtype="proportionalResident"})
+
+      - record: rig:proc:swap_bytes
+        expr: sum without (memtype) (namedprocess_namegroup_memory_bytes{memtype="swapped"})
+
+      - record: rig:proc:virtual_bytes
+        expr: sum without (memtype) (namedprocess_namegroup_memory_bytes{memtype="virtual"})
+
+      - record: rig:proc:read_bytes_per_sec
+        expr: rate(namedprocess_namegroup_read_bytes_total[5m])
+
+      - record: rig:proc:write_bytes_per_sec
+        expr: rate(namedprocess_namegroup_write_bytes_total[5m])
+
+      - record: rig:proc:io_bytes_per_sec
+        expr: |
+          rate(namedprocess_namegroup_read_bytes_total[5m])
+          + rate(namedprocess_namegroup_write_bytes_total[5m])
+
+      # A major fault is a page fetched from disk. Under swap pressure this
+      # names the group paying for the thrash.
+      - record: rig:proc:major_faults_per_sec
+        expr: rate(namedprocess_namegroup_major_page_faults_total[5m])
+
+      - record: rig:proc:context_switches_per_sec
+        expr: rate(namedprocess_namegroup_context_switches_total[5m])
+
+      - record: rig:proc:open_fds
+        expr: namedprocess_namegroup_open_filedesc
+
+      # --- containers -----------------------------------------------------
+      - record: rig:container:cpu_cores
+        expr: sum by (name) (rate(container_cpu_usage_seconds_total{name!=""}[5m]))
+
+      - record: rig:container:rss_bytes
+        expr: sum by (name) (container_memory_rss{name!=""})
+
+      - record: rig:container:io_bytes_per_sec
+        expr: sum by (name) (rate(container_fs_reads_bytes_total{name!=""}[5m]))
+              + sum by (name) (rate(container_fs_writes_bytes_total{name!=""}[5m]))
+
+      # --- what the blocked threads are actually waiting on ---------------
+      # wchan is the kernel function a thread is parked in. Under an IO stall
+      # this reads like a stack trace for the whole machine.
+      - record: rig:proc:wchan_threads
+        expr: namedprocess_namegroup_threads_wchan > 0

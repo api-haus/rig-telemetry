@@ -1,4 +1,7 @@
+.env
+*.tar.gz
 *DS_Store
 .vs/
 .vscode/
 .idea/
+__pycache__/

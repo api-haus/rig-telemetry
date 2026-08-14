@@ -1,137 +1,158 @@
-networks:
-  monitor-net:
-    driver: bridge
+name: rig-telemetry
 
-volumes:
-    prometheus_data: {}
-    grafana_data: {}
+# Host network throughout: the exporters need the host's real /proc, sensors
+# and PCI devices anyway, and it leaves no container DNS to break on restart.
+# Port assignments and their quirks: docs/runbook.md.
 
 services:
 
   prometheus:
-    image: prom/prometheus:v3.10.0
-    container_name: prometheus
+    image: prom/prometheus:v3.5.0
+    container_name: rig-prometheus
+    network_mode: host
+    restart: unless-stopped
+    user: root
     volumes:
-      - ./prometheus:/etc/prometheus
+      - ./prometheus:/etc/prometheus:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
+      - '--storage.tsdb.retention.time=2y'
+      - '--storage.tsdb.retention.size=30GB'  # / has ~147 GB free at 85% used
       - '--web.enable-lifecycle'
-    restart: unless-stopped
-    expose:
-      - 9090
-    networks:
-      - monitor-net
+      - '--web.enable-admin-api'
+      - '--web.listen-address=127.0.0.1:13390'
+      - '--query.max-samples=250000000'
     labels:
-      org.label-schema.group: "monitoring"
-
-  alertmanager:
-    image: prom/alertmanager:v0.31.1
-    container_name: alertmanager
-    volumes:
-      - ./alertmanager:/etc/alertmanager
-    command:
-      - '--config.file=/etc/alertmanager/config.yml'
-      - '--storage.path=/alertmanager'
-    restart: unless-stopped
-    expose:
-      - 9093
-    networks:
-      - monitor-net
-    labels:
-      org.label-schema.group: "monitoring"
-
-  nodeexporter:
-    image: prom/node-exporter:v1.10.2
-    container_name: nodeexporter
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    command:
-      - '--path.procfs=/host/proc'
-      - '--path.rootfs=/rootfs'
-      - '--path.sysfs=/host/sys'
-      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
-    restart: unless-stopped
-    expose:
-      - 9100
-    networks:
-      - monitor-net
-    labels:
-      org.label-schema.group: "monitoring"
-
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.55.1
-    container_name: cadvisor
-    privileged: true
-    devices:
-      - /dev/kmsg:/dev/kmsg
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker:/var/lib/docker:ro
-      #- /cgroup:/cgroup:ro #doesn't work on MacOS only for Linux
-    restart: unless-stopped
-    expose:
-      - 8080
-    networks:
-      - monitor-net
-    labels:
-      org.label-schema.group: "monitoring"
+      org.label-schema.group: "rig-telemetry"
 
   grafana:
-    image: grafana/grafana:12.4.0
-    container_name: grafana
+    image: grafana/grafana:12.1.0
+    container_name: rig-grafana
+    network_mode: host
+    restart: unless-stopped
+    depends_on: [prometheus]
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
-      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     environment:
-      - GF_SECURITY_ADMIN_USER=${ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
-    restart: unless-stopped
-    expose:
-      - 3000
-    networks:
-      - monitor-net
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_SERVER_HTTP_PORT: 13337
+      GF_SECURITY_ADMIN_USER: ${GF_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_FEATURE_TOGGLES_ENABLE: publicDashboards
     labels:
-      org.label-schema.group: "monitoring"
+      org.label-schema.group: "rig-telemetry"
 
-  pushgateway:
-    image: prom/pushgateway:v1.11.2
-    container_name: pushgateway
+  # Host CPU, load, memory, disks, filesystems, network, PSI and every hwmon
+  # sensor (k10temp, asusec water loop, nvme composite, spd5118 DIMMs).
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    container_name: rig-node-exporter
+    network_mode: host
+    pid: host
     restart: unless-stopped
-    expose:
-      - 9091
-    networks:
-      - monitor-net
-    labels:
-      org.label-schema.group: "monitoring"
-
-  caddy:
-    image: caddy:2.11.2
-    container_name: caddy
-    ports:
-      - "3000:3000"
-      - "8080:8080"
-      - "9090:9090"
-      - "9093:9093"
-      - "9091:9091"
     volumes:
-      - ./caddy:/etc/caddy
-    environment:
-      - ADMIN_USER=${ADMIN_USER:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
-      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:-$2a$14$1l.IozJx7xQRVmlkEQ32OeEEfP5mRxTpbDTCTcXRqn19gXD8YK1pO}
-    restart: unless-stopped
-    networks:
-      - monitor-net
+      - /:/host:ro,rslave
+    command:
+      - '--path.rootfs=/host'
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--web.listen-address=127.0.0.1:13310'
+      - '--collector.processes'          # procs_blocked: the D-state count that IS the load average
+      - '--collector.systemd'
+      - '--collector.interrupts'
+      - '--collector.drm'
+      - '--collector.ethtool'
+      - '--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+|host/(dev|proc|sys|run))($$|/)'
+      - '--collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|fuse\.rclone|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$$'
     labels:
-      org.label-schema.group: "monitoring"
+      org.label-schema.group: "rig-telemetry"
+
+  # Per-process-group CPU, RSS, swap, IO and — the important one —
+  # process state counts, so a load spike can be attributed to a named binary.
+  process-exporter:
+    image: ncabatoff/process-exporter:0.8.7
+    container_name: rig-process-exporter
+    network_mode: host
+    pid: host
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - ./process-exporter:/config:ro
+    command:
+      - '--procfs=/host/proc'
+      - '--config.path=/config/config.yml'
+      - '--web.listen-address=127.0.0.1:13320'
+    labels:
+      org.label-schema.group: "rig-telemetry"
+
+  # GPU: utilisation, temperature, power draw, fan, clocks, VRAM, throttling.
+  # No nvidia-container-toolkit on this host, so nvidia-smi and libnvidia-ml
+  # are bind-mounted straight in.
+  nvidia-exporter:
+    image: utkuozdemir/nvidia_gpu_exporter:1.3.2
+    container_name: rig-nvidia-exporter
+    network_mode: host
+    restart: unless-stopped
+    devices:
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+    volumes:
+      - /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro
+      - /usr/lib/libnvidia-ml.so:/usr/lib/libnvidia-ml.so:ro
+      - /usr/lib/libnvidia-ml.so.1:/usr/lib/libnvidia-ml.so.1:ro
+    command:
+      - '--web.listen-address=127.0.0.1:13330'
+    labels:
+      org.label-schema.group: "rig-telemetry"
+
+  # NVMe SMART: wear, media errors, unsafe shutdowns, per-drive temperature.
+  smartctl-exporter:
+    image: prometheuscommunity/smartctl-exporter:v0.14.0
+    container_name: rig-smartctl-exporter
+    network_mode: host
+    privileged: true
+    user: root
+    restart: unless-stopped
+    volumes:
+      - /dev:/dev:ro
+    command:
+      - '--smartctl.path=/usr/sbin/smartctl'
+      - '--smartctl.interval=120s'
+      - '--web.listen-address=127.0.0.1:13340'
+    labels:
+      org.label-schema.group: "rig-telemetry"
+
+  # Container attribution, so a runaway build in Docker is not invisible.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
+    container_name: rig-cadvisor
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /cgroup:/cgroup:ro
+    command:
+      - '--port=13350'
+      - '--listen_ip=127.0.0.1'
+      - '--housekeeping_interval=15s'
+      - '--docker_only=true'
+      - '--store_container_labels=false'
+    labels:
+      org.label-schema.group: "rig-telemetry"
+
+volumes:
+  prometheus_data: {}
+  grafana_data: {}

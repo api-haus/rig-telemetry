@@ -1,0 +1,47 @@
+# Layer 1 — sensors, renamed. Downstream reads `rig:*`, never `{sensor="temp5"}`.
+
+groups:
+
+  - name: rig-telemetry
+    interval: 15s
+    rules:
+
+      # hwmon exports temp5=34 and puts the word "Water_In" in a second series.
+      # Fold the name in so a query can ask for the sensor by name.
+      - record: rig:temp_celsius
+        expr: |
+          (
+            node_hwmon_temp_celsius
+              * on (instance, chip, sensor) group_left (label) node_hwmon_sensor_label
+              * on (instance, chip)         group_left (chip_name) node_hwmon_chip_names
+          )
+          or
+          (
+            (node_hwmon_temp_celsius unless on (instance, chip, sensor) node_hwmon_sensor_label)
+              * on (instance, chip) group_left (chip_name) node_hwmon_chip_names
+          )
+
+      - record: rig:fan_rpm
+        expr: |
+          node_hwmon_fan_rpm
+            * on (instance, chip) group_left (chip_name) node_hwmon_chip_names
+
+      # Case air, measured at the motherboard. The reference every thermal
+      # health figure below is taken against.
+      - record: rig:ambient_celsius
+        expr: max(rig:temp_celsius{chip_name="asusec", label="Motherboard"})
+
+      - record: rig:cpu_celsius
+        expr: max(rig:temp_celsius{chip_name="k10temp", label="Tctl"})
+
+      - record: rig:coolant_in_celsius
+        expr: max(rig:temp_celsius{chip_name="asusec", label="Water_In"})
+
+      - record: rig:coolant_out_celsius
+        expr: max(rig:temp_celsius{chip_name="asusec", label="Water_Out"})
+
+      - record: rig:gpu_celsius
+        expr: max(nvidia_smi_temperature_gpu)
+
+      - record: rig:gpu_watts
+        expr: max(nvidia_smi_power_draw_watts)

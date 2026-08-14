@@ -1,0 +1,171 @@
+# AGENTS.md
+
+You are looking at a always-on telemetry stack for one Linux workstation. It
+records CPU, memory, swap, disk, network, per-process attribution, every hwmon
+sensor, GPU and NVMe SMART data every 15 seconds, and keeps 2 years of it.
+
+**Start here. Do not write PromQL first.**
+
+```
+tools/rig why
+```
+
+That prints a verdict, the numbers behind it, and the process groups
+responsible. It answers "what is wrong with this machine" in one call. Almost
+every question a human asks is answered by it or by one more command below.
+
+## The tools
+
+| Command | Answers |
+| --- | --- |
+| `rig why` | What is wrong right now, and who caused it |
+| `rig who --by <dimension>` | Who is using a resource |
+| `rig timeline --since 24h` | When load spiked, and which group owned each spike |
+| `rig thermals` | Temperatures, and whether cooling has degraded |
+| `rig disk` | IO, latency, capacity, drive wear |
+| `rig alerts` | What is firing |
+| `rig health` | Whether this stack itself is working |
+| `rig q '<promql>'` | Arbitrary instant query |
+| `rig range '<promql>' --since 7d --plot` | Arbitrary range query, summarised |
+| `rig metrics [pattern]` | List the series that exist |
+
+Every command takes `--json` for parsing and `--at <RFC3339>` to evaluate at a
+past instant. `rig who` and `rig timeline` take `--since` to aggregate over a
+window.
+
+Dimensions for `--by`: `cpu`, `blocked`, `running`, `mem`, `rss`, `swap`, `io`,
+`read`, `write`, `faults`, `procs`, `threads`, `fds`, `switches`.
+
+## Read this before you diagnose a load average
+
+Linux load average counts runnable tasks **and** tasks in uninterruptible sleep
+(D state, waiting on IO). A load of 500 with an idle CPU is not a CPU problem.
+
+Always split it before concluding anything:
+
+```
+rig q 'rig:load:runnable'   # wants CPU
+rig q 'rig:load:blocked'    # waiting on a disk
+```
+
+`rig:psi:io_full` is the honest number: the fraction of time during which **no
+task on the machine** could make progress because of IO. Above 0.3 sustained,
+the machine is stopped, not slow.
+
+## Decision procedure
+
+1. `rig why`. Take the verdict.
+2. If it says **MEMORY THRASH**: the disk is busy serving swap, not work.
+   `rig who --by faults` names who is paging. Look for a build with unbounded
+   parallelism before blaming the disk.
+3. If it says **IO STALL**: `rig who --by blocked`, then `rig who --by io`.
+4. If it says **CPU SATURATED**: `rig who --by cpu`.
+5. If it says **HEALTHY** but the human disagrees, they are describing the past.
+   Use `rig timeline --since 24h --min-load 2` to find the spike, then
+   `rig why --at <that timestamp>`.
+
+## Metric vocabulary
+
+Everything this stack computes lives in the `rig:` namespace. Raw exporter
+series (`node_*`, `namedprocess_*`, `nvidia_smi_*`, `smartctl_*`,
+`container_*`) are still there, but prefer `rig:` — it is stable, labelled by
+name rather than by `temp5`, and carries no `instance`/`job` noise on
+host-level figures.
+
+`rig metrics` lists all of them. `docs/metrics.md` explains each one.
+
+The four groups:
+
+- `rig:load:*`, `rig:psi:*`, `rig:cpu:*`, `rig:mem:*`, `rig:disk:*`, `rig:fs:*`
+  — machine state.
+- `rig:proc:*` and `rig:container:*` — attribution, keyed by `groupname` /
+  `name`. **This is the "who" namespace.**
+- `rig:temp_celsius`, `rig:fan_rpm`, `rig:*_celsius` — sensors, by name.
+- `rig:thermal:*` — derived cooling health, including the degradation ratios.
+
+## Process groups
+
+`rig:proc:*` is keyed by `groupname`, not by PID. A group is a named binary or
+a named family of them — `build:rust-link` covers every linker at once,
+`browser:zen-bin` covers the browser. The mapping is
+`process-exporter/config.yml`; edit it to add a group, then
+`docker compose restart process-exporter`.
+
+Naming convention: `build:*`, `agent:*`, `ide:*`, `browser:*`, `game:*`,
+`sys:*`, and a bare binary name for everything unclassified.
+
+## Useful queries
+
+```promql
+# who owned the load average, worst 5 minutes of the last day
+topk(5, max_over_time(rig:proc:blocked[24h]))
+
+# a group's memory over a month
+rig:proc:rss_proportional_bytes{groupname="build:rust-link"}
+
+# what the blocked threads are parked in, kernel-side
+topk(10, rig:proc:wchan_threads)
+
+# how long an alert has been true
+count_over_time(ALERTS{alertname="RigIOStall", alertstate="firing"}[30d]) * 15
+
+# when will this filesystem fill
+predict_linear(node_filesystem_avail_bytes{mountpoint="/"}[7d], 30*86400)
+
+# cooling efficiency now vs a month ago; >1.15 means dust
+rig:thermal:gpu_degradation_ratio
+```
+
+## Rules for reporting a finding
+
+- Quote the number and the series it came from. `rig:psi:io_full = 0.83` beats
+  "the disk seems busy".
+- Name the process **group**, not a PID. PIDs are gone by the time anyone reads
+  your answer; `build:rust-link` is still meaningful next month.
+- Distinguish `rig:proc:rss_bytes` from `rig:proc:rss_proportional_bytes`. The
+  first counts pages shared between forks once per fork, so 48 linkers can
+  appear to hold more memory than the machine has. Use the proportional series
+  for "how much is really theirs" and say which one you used.
+- If a `rig:thermal:*_degradation_ratio` is empty, the stack does not have 37
+  days of history yet. Say that. Do not substitute a raw temperature and call
+  it a degradation finding.
+- `rig health` first if anything looks impossibly quiet. A dead exporter reads
+  exactly like a calm machine.
+
+## Where things are
+
+```
+docker-compose.yml            the stack
+prometheus/prometheus.yml     scrape config, retention
+prometheus/rules/*.yml        recording rules (the rig: namespace) and alerts
+process-exporter/config.yml   process group definitions
+grafana/dashboards/*.json     generated — edit tools/gen-dashboards.py instead
+tools/rig                     the CLI above
+tools/gen-dashboards.py       dashboard generator; --check verifies freshness
+docs/metrics.md               every series, explained
+docs/thermals.md              how dust detection works and when it lies
+docs/runbook.md               operations
+```
+
+Grafana is at <http://localhost:13337>, Prometheus at <http://localhost:13390>.
+Both bind to loopback only.
+
+## Changing rules
+
+After editing anything under `prometheus/`:
+
+```
+docker exec rig-prometheus promtool check config /etc/prometheus/prometheus.yml
+curl -X POST http://localhost:13390/-/reload
+tools/rig health          # 0 failing
+```
+
+After editing `tools/gen-dashboards.py`:
+
+```
+tools/gen-dashboards.py   # Grafana picks the folder up within 30s
+```
+
+Recording rules are not retroactive. A new rule starts producing data from the
+moment it is added, so a rule added today cannot answer a question about last
+week — query the raw exporter series for that.

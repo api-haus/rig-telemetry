@@ -1,0 +1,150 @@
+# Alerts. No Alertmanager: a firing alert is an `ALERTS{alertstate="firing"}`
+# series, which is what agents query and Grafana draws. See docs/metrics.md.
+
+groups:
+
+  - name: rig-alerts-saturation
+    rules:
+
+      - alert: RigIOStall
+        expr: rig:psi:io_full > 0.4
+        for: 5m
+        labels: {severity: critical, domain: io}
+        annotations:
+          summary: "Machine stalled on disk {{ $value | humanizePercentage }} of the time"
+          diagnose: "rig who --by blocked, then rig why. Look for a group with a high rig:proc:blocked."
+
+      - alert: RigSwapThrash
+        expr: rig:mem:swap_pages_per_sec > 5000
+        for: 5m
+        labels: {severity: critical, domain: memory}
+        annotations:
+          summary: "{{ $value | printf \"%.0f\" }} pages/s moving through swap"
+          diagnose: "topk(5, rig:proc:major_faults_per_sec) names who is paging. Usually one build with unbounded parallelism."
+
+      - alert: RigLoadIOBound
+        expr: rig:load:per_cpu > 4 and rig:load:io_bound_ratio > 0.8
+        for: 5m
+        labels: {severity: warning, domain: io}
+        annotations:
+          summary: "Load {{ $value | printf \"%.0f\" }}x cores and almost all of it is blocked, not running"
+          diagnose: "CPU is idle. Do not look at CPU. topk(5, rig:proc:blocked)."
+
+      - alert: RigCPUSaturated
+        expr: rig:cpu:busy_ratio > 0.95 and rig:psi:cpu_some > 0.5
+        for: 15m
+        labels: {severity: warning, domain: cpu}
+        annotations:
+          summary: "CPU pinned with tasks queueing for it"
+          diagnose: "topk(5, rig:proc:cpu_cores)"
+
+      - alert: RigMemoryExhausted
+        expr: rig:mem:used_ratio > 0.95
+        for: 5m
+        labels: {severity: critical, domain: memory}
+        annotations:
+          summary: "Memory {{ $value | humanizePercentage }} used"
+          diagnose: "topk(5, rig:proc:rss_proportional_bytes)"
+
+      - alert: RigFilesystemFilling
+        expr: max by (device) (rig:fs:used_ratio) > 0.90
+        for: 30m
+        labels: {severity: warning, domain: disk}
+        annotations:
+          summary: "{{ $labels.device }} is {{ $value | humanizePercentage }} full"
+          diagnose: "predict_linear(node_filesystem_avail_bytes[7d], 30*86400) for time remaining."
+
+  - name: rig-alerts-thermal
+    rules:
+
+      - alert: RigGPUThrottleImminent
+        expr: rig:thermal:gpu_headroom_c < 5
+        for: 2m
+        labels: {severity: warning, domain: thermal}
+        annotations:
+          summary: "GPU {{ $value }}C from its throttle limit"
+          diagnose: "Check rig:thermal:gpu_fan_ratio. Fan at maximum with low headroom means the cooler, not the workload."
+
+      - alert: RigCPUHot
+        expr: rig:cpu_celsius > 90
+        for: 5m
+        labels: {severity: warning, domain: thermal}
+        annotations:
+          summary: "CPU at {{ $value | printf \"%.0f\" }}C sustained"
+          diagnose: "rig thermals. Split the rise: die_to_coolant is the mount, coolant_rise is the radiator."
+
+      - alert: RigPumpStalled
+        expr: rig:thermal:pump_rpm < 300 and rig:cpu:busy_ratio > 0.3
+        for: 5m
+        labels: {severity: critical, domain: thermal}
+        annotations:
+          summary: "Loop fan/pump at {{ $value | printf \"%.0f\" }} RPM under load"
+          diagnose: "Physical. Check the pump header and the fan curve."
+
+      - alert: RigCoolingNeedsCleaning
+        expr: rig:thermal:gpu_degradation_ratio > 1.15
+        for: 6h
+        labels: {severity: warning, domain: thermal, action: clean}
+        annotations:
+          summary: "GPU cooling {{ $value | printf \"%.0f%%\" }} of its month-ago efficiency — dust"
+          diagnose: "Thermal resistance rose at equal power and equal ambient. That is a blocked airflow path. Clean the card and the intake filters."
+
+      - alert: RigRadiatorNeedsCleaning
+        expr: rig:thermal:radiator_degradation_ratio > 1.20
+        for: 6h
+        labels: {severity: warning, domain: thermal, action: clean}
+        annotations:
+          summary: "Radiator dumping heat {{ $value | printf \"%.0f%%\" }} worse than a month ago"
+          diagnose: "Coolant sits further above case air at the same load. Clean the radiator fins and the intake."
+
+      - alert: RigMountDegraded
+        expr: rig:thermal:mount_degradation_ratio > 1.20
+        for: 6h
+        labels: {severity: warning, domain: thermal, action: repaste}
+        annotations:
+          summary: "Die-to-coolant gap widened {{ $value | printf \"%.0f%%\" }} in a month"
+          diagnose: "The radiator is fine, the contact is not. Dried paste or a loosened cold plate."
+
+  - name: rig-alerts-hardware
+    rules:
+
+      - alert: RigDiskWearHigh
+        expr: smartctl_device_percentage_used > 85
+        for: 1h
+        labels: {severity: warning, domain: disk}
+        annotations:
+          summary: "{{ $labels.device }} at {{ $value }}% of rated write endurance"
+
+      - alert: RigDiskMediaErrors
+        expr: increase(smartctl_device_media_errors[24h]) > 0
+        for: 10m
+        labels: {severity: critical, domain: disk}
+        annotations:
+          summary: "{{ $labels.device }} logged {{ $value | printf \"%.0f\" }} media errors in 24h"
+
+      - alert: RigDiskSmartFailing
+        expr: smartctl_device_smart_status == 0
+        for: 10m
+        labels: {severity: critical, domain: disk}
+        annotations:
+          summary: "{{ $labels.device }} reports SMART failure"
+
+  - name: rig-alerts-meta
+    rules:
+
+      # If this fires, everything else in this file is silent for the wrong
+      # reason. Check it first.
+      - alert: RigExporterDown
+        expr: up == 0
+        for: 5m
+        labels: {severity: critical, domain: meta}
+        annotations:
+          summary: "Scrape target {{ $labels.job }} down — this stack is blind to it"
+          diagnose: "docker compose ps; docker compose logs <service>"
+
+      - alert: RigDataGap
+        expr: absent(node_load1)
+        for: 10m
+        labels: {severity: critical, domain: meta}
+        annotations:
+          summary: "No host metrics arriving at all"

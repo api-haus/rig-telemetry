@@ -1,53 +1,55 @@
 global:
-  scrape_interval:     15s
+  scrape_interval: 15s
   evaluation_interval: 15s
-
-  # Attach these labels to any time series or alerts when communicating with
-  # external systems (federation, remote storage, Alertmanager).
   external_labels:
-      monitor: 'docker-host-alpha'
+    host: cachyos-x8664
 
-# Load and evaluate rules in this file every 'evaluation_interval' seconds.
 rule_files:
-  - "alert.rules"
+  - /etc/prometheus/rules/*.yml
 
-# A scrape configuration containing exactly one endpoint to scrape.
+# One host, so `instance` carries no information — but it defaults to
+# host:port, which means changing a port silently splits every raw series in
+# two. Pin it to the job name in every job below.
 scrape_configs:
-  - job_name: 'nodeexporter'
-    scrape_interval: 5s
+
+  - job_name: prometheus
     static_configs:
-      - targets: ['nodeexporter:9100']
+      - targets: ['127.0.0.1:13390']
+    relabel_configs: &pin_instance
+      - target_label: instance
+        replacement: rig
 
-  - job_name: 'cadvisor'
-    scrape_interval: 5s
+  - job_name: node
     static_configs:
-      - targets: ['cadvisor:8080']
+      - targets: ['127.0.0.1:13310']
+    relabel_configs: *pin_instance
 
-  - job_name: 'prometheus'
-    scrape_interval: 10s
+  - job_name: process
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ['127.0.0.1:13320']
+    relabel_configs: *pin_instance
 
-  - job_name: 'pushgateway'
-    scrape_interval: 10s
-    honor_labels: true
+  - job_name: gpu
     static_configs:
-      - targets: ['pushgateway:9091']
+      - targets: ['127.0.0.1:13330']
+    relabel_configs: *pin_instance
 
-
-alerting:
-  alertmanagers:
-  - scheme: http
+  # smartctl re-reads the drives on its own interval; scraping it faster only
+  # re-serves a cached sample.
+  - job_name: smart
+    scrape_interval: 60s
+    scrape_timeout: 30s
     static_configs:
-    - targets: 
-      - 'alertmanager:9093'
+      - targets: ['127.0.0.1:13340']
+    relabel_configs: *pin_instance
 
-#  - job_name: 'nginx'
-#    scrape_interval: 10s
-#    static_configs:
-#      - targets: ['nginxexporter:9113']
-
-#  - job_name: 'aspnetcore'
-#    scrape_interval: 10s
-#    static_configs:
-#      - targets: ['eventlog-proxy:5000', 'eventlog:5000']
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['127.0.0.1:13350']
+    relabel_configs: *pin_instance
+    metric_relabel_configs:
+      # cAdvisor's per-CPU and filesystem series dwarf everything else and
+      # answer nothing this stack is for.
+      - source_labels: [__name__]
+        regex: 'container_(tasks_state|memory_failures_total|fs_(sector|io_time|io_current|read_seconds|write_seconds)_.*)'
+        action: drop

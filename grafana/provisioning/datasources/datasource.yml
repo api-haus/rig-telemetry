@@ -5,7 +5,11 @@ datasources:
     type: prometheus
     access: proxy
     orgId: 1
-    url: http://prometheus:9090
-    basicAuth: false
+    uid: rig-prom
+    url: http://127.0.0.1:13390
     isDefault: true
+    version: 1
     editable: true
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: POST

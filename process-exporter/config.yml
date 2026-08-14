@@ -1,0 +1,61 @@
+# Groups are matched top to bottom; the first match wins. Named groups exist
+# where the bare binary name hides who asked for the work (a `node` process
+# says nothing, `build:node-toolchain` says plenty). The final rule is the
+# catch-all that gives every remaining process a group named after its comm.
+#
+# See docs/metrics.md for the series this produces.
+
+process_names:
+
+  # --- toolchains: the usual cause of a load spike on this box ---------------
+  - name: "build:rust-link"
+    comm: [ld.mold, ld.lld, ld, lld, rust-lld]
+
+  - name: "build:rust-compile"
+    comm: [rustc, cargo, cargo-clippy, rust-analyzer]
+
+  - name: "build:c-cpp"
+    comm: [cc1, cc1plus, clang, clang++, gcc, g++, ld.bfd, ld.gold, make, ninja, cmake, sccache, ccache]
+
+  - name: "build:dotnet"
+    comm: [dotnet, msbuild, MSBuild, VBCSCompiler, mono]
+
+  - name: "build:jvm"
+    comm: [java, javac, gradle, kotlin-compiler]
+
+  # --- agents and editors ---------------------------------------------------
+  - name: "agent:claude"
+    comm: [claude]
+
+  - name: "ide:jetbrains"
+    comm: [webstorm, rustrover, rider, idea, clion, pycharm, datagrip, fleet]
+
+  - name: "ide:other"
+    comm: [code, cursor, zed, nvim, orca-ide, helix]
+
+  # --- interactive load -----------------------------------------------------
+  - name: "browser:{{.Comm}}"
+    comm: [zen-bin, firefox, chrome, chromium, brave, "Isolated Web Co", "Web Content", "WebExtensions", "RDD Process", "Privileged Cont"]
+
+  - name: "game:steam"
+    comm: [steam, steamwebhelper, steamerrorreporte, gameoverlayui, reaper]
+
+  - name: "game:wine"
+    comm: [wine, wineserver, wine64, wine-preloader, explorer.exe, rundll32.exe, services.exe, winedevice.exe]
+
+  # --- the machine itself ---------------------------------------------------
+  - name: "sys:container"
+    comm: [dockerd, containerd, "containerd-shim", runc, podman, conmon]
+
+  - name: "sys:daemon"
+    comm: [systemd, systemd-journal, systemd-udevd, systemd-logind, udisksd, upowerd, polkitd, dbus-daemon, NetworkManager, sshd, cron, crond]
+
+  - name: "sys:desktop"
+    comm: [Xorg, Xwayland, kwin_wayland, gnome-shell, hyprland, sway, plasmashell, pipewire, wireplumber, mutter]
+
+  - name: "sys:filesystem"
+    comm: [btrfs, "btrfs-transacti", "btrfs-cleaner", kswapd0, rclone, mount.fuse, fuse]
+
+  # --- everything else, one group per binary --------------------------------
+  - name: "{{.Comm}}"
+    cmdline: ['.+']

@@ -1,0 +1,115 @@
+# Layer 2 — machine state. Series reference: docs/metrics.md.
+# Host-wide figures carry no labels: one machine, and `instance`/`job` would
+# only force a matcher onto every downstream join.
+
+groups:
+
+  - name: rig-load
+    interval: 15s
+    rules:
+
+      - record: rig:load:per_cpu
+        expr: max(node_load1) / count(count by (cpu) (node_cpu_seconds_total))
+
+      # The two halves of the load average.
+      - record: rig:load:runnable
+        expr: max(node_procs_running)
+
+      - record: rig:load:blocked
+        expr: max(node_procs_blocked)
+
+      # 1.0 means the load average is entirely processes stuck on IO.
+      - record: rig:load:io_bound_ratio
+        expr: max(node_procs_blocked) / max(clamp_min(node_load1, 1))
+
+      # --- pressure stall information ------------------------------------
+      # `some` = at least one task stalled. `full` = every task stalled, i.e.
+      # the machine did no work at all for that fraction of the time.
+      - record: rig:psi:cpu_some
+        expr: max(rate(node_pressure_cpu_waiting_seconds_total[5m]))
+
+      - record: rig:psi:io_some
+        expr: max(rate(node_pressure_io_waiting_seconds_total[5m]))
+
+      - record: rig:psi:io_full
+        expr: max(rate(node_pressure_io_stalled_seconds_total[5m]))
+
+      - record: rig:psi:memory_some
+        expr: max(rate(node_pressure_memory_waiting_seconds_total[5m]))
+
+      - record: rig:psi:memory_full
+        expr: max(rate(node_pressure_memory_stalled_seconds_total[5m]))
+
+      # --- cpu ------------------------------------------------------------
+      - record: rig:cpu:busy_ratio
+        expr: 1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m]))
+
+      - record: rig:cpu:iowait_ratio
+        expr: avg(rate(node_cpu_seconds_total{mode="iowait"}[5m]))
+
+      - record: rig:cpu:system_ratio
+        expr: avg(rate(node_cpu_seconds_total{mode="system"}[5m]))
+
+      - record: rig:cpu:user_ratio
+        expr: avg(rate(node_cpu_seconds_total{mode="user"}[5m]))
+
+      # --- memory ---------------------------------------------------------
+      - record: rig:mem:used_ratio
+        expr: 1 - max(node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)
+
+      - record: rig:mem:swap_used_bytes
+        expr: max(node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes)
+
+      - record: rig:mem:swap_used_ratio
+        expr: |
+          max(
+            (node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes)
+            / clamp_min(node_memory_SwapTotal_bytes, 1)
+          )
+
+      # Pages moving in and out of swap per second. Sustained non-zero here
+      # with high io_full is a thrash, not a shortage: the machine is spending
+      # its disk bandwidth on its own memory.
+      - record: rig:mem:swap_pages_per_sec
+        expr: max(rate(node_vmstat_pswpin[5m]) + rate(node_vmstat_pswpout[5m]))
+
+      - record: rig:mem:major_faults_per_sec
+        expr: max(rate(node_vmstat_pgmajfault[5m]))
+
+      # --- disk (keeps its `device` label) --------------------------------
+      - record: rig:disk:util_ratio
+        expr: sum without (instance, job) (rate(node_disk_io_time_seconds_total[5m]))
+
+      - record: rig:disk:read_bytes_per_sec
+        expr: sum without (instance, job) (rate(node_disk_read_bytes_total[5m]))
+
+      - record: rig:disk:write_bytes_per_sec
+        expr: sum without (instance, job) (rate(node_disk_written_bytes_total[5m]))
+
+      - record: rig:disk:await_seconds
+        expr: |
+          sum without (instance, job) (
+            rate(node_disk_io_time_weighted_seconds_total[5m])
+            / clamp_min(
+                rate(node_disk_reads_completed_total[5m])
+                + rate(node_disk_writes_completed_total[5m]), 1)
+          )
+
+      # --- filesystems (keeps `device` and `mountpoint`) ------------------
+      # btrfs subvolumes and bind mounts put one device under many
+      # mountpoints. Consumers aggregate `by (device)`; `mountpoint` is kept
+      # so a human can still tell which one they meant.
+      - record: rig:fs:used_ratio
+        expr: |
+          sum without (instance, job, fstype) (
+            1 - (
+              node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.*"}
+              / clamp_min(node_filesystem_size_bytes{fstype!~"tmpfs|fuse.*"}, 1)
+            )
+          )
+
+      - record: rig:fs:avail_bytes
+        expr: |
+          sum without (instance, job, fstype) (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.*"}
+          )
