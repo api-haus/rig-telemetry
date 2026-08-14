@@ -1,0 +1,27 @@
+# Price overrides — the lowest tier, shipped with the repo.
+#
+# A harness names its models however it likes, and some of those names reach no
+# entry in models.dev by any transformation. This file says what a name is,
+# once, so the lookup stops guessing.
+#
+#   <model as the harness names it>   <TAB>   moonshotai/kimi-k2.7-code
+#   <model as the harness names it>   <TAB>   0.95 0.19 0.95 4
+#
+# The first form is an alias into models.dev, so the rates stay current. Prefer
+# it. The second form is four rates in dollars per million tokens — input,
+# cache read, cache write, output — for a model nobody publishes.
+#
+# Precedence, highest first:
+#   RIG_AI_PRICE_<model with non-alphanumerics as underscores>  (environment)
+#   ~/.config/rig-telemetry/prices.tsv                          (yours)
+#   this file
+#   models.dev, matched directly
+#
+# `rig ai doctor` prints the exact line to add for anything still unpriced.
+
+# Kimi Code sells plans, and the plan name is the model name on the wire.
+# config.toml carries the mapping in display_name: "K2.7 Coding".
+kimi-code/kimi-for-coding	moonshotai/kimi-k2.7-code
+kimi-code/kimi-for-coding-highspeed	moonshotai/kimi-k2.7-code-highspeed
+kimi-for-coding	moonshotai/kimi-k2.7-code
+kimi-for-coding-highspeed	moonshotai/kimi-k2.7-code-highspeed

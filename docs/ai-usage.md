@@ -106,12 +106,42 @@ prefers the first-party provider, then any entry that publishes a non-zero
 price. A gateway listing $0 is a subscription plan, which answers a different
 question.
 
-**Nothing is guessed.** A model with no published per-token rate anywhere is
-counted in tokens and excluded from every dollar figure, and `rig ai doctor`
-names it. Half a money figure is worse than none.
-
 Where a published cache rate is missing, the plain input rate stands in — the
 honest floor, not an invented discount.
+
+### When a name reaches nothing
+
+A harness names its models however it likes, and a plan name is not a model id.
+Kimi Code sends `kimi-code/kimi-for-coding` on the wire; models.dev has no such
+entry, and no transformation of that string reaches one. Its `config.toml` says
+what it is — `display_name = "K2.7 Coding"` — which is `moonshotai/kimi-k2.7-code`.
+
+So a name is stated once rather than guessed, in order of precedence:
+
+| Source | |
+| --- | --- |
+| `RIG_AI_PRICE_kimi_code_kimi_for_coding` | environment; non-alphanumerics become `_` |
+| `~/.config/rig-telemetry/prices.tsv` | yours |
+| `share/prices.tsv` | shipped with the repo |
+| models.dev, matched directly | the usual case |
+
+Each line is a model name, a tab, and either an alias or four rates:
+
+```
+kimi-code/kimi-for-coding	moonshotai/kimi-k2.7-code
+some-private-model	0.95 0.19 0.95 4
+```
+
+**Prefer the alias.** It says what the model *is*, so the rates stay current
+instead of ageing in a file here. The four-number form — input, cache read,
+cache write, output, dollars per million — is for a model nobody publishes.
+
+**Nothing is guessed.** A model that no tier reaches is counted in tokens and
+excluded from every dollar figure, and `rig ai doctor` prints the exact line
+that fixes it. Half a money figure is worse than none.
+
+`rig ai models` has a `rate from` column saying whether each figure came from
+models.dev or from an override.
 
 **Money is not stored.** The ledger holds tokens; dollars are computed on
 every read. A price catalogue that arrives late, or a rate that changes, then

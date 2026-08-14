@@ -820,15 +820,19 @@ def cmd_ai_models(args) -> int:
     out = []
     for r in rows:
         rates = prices.lookup(r["provider"], r["model"])
+        via = rates["via"] if rates else ""
         out.append((r["model"], r["provider"], r["harness"], money(r["cost"]),
                     f"{r['requests']:,.0f}",
                     f"{rates['input']:g}/{rates['cache_read']:g}/{rates['cache_write']:g}/{rates['output']:g}"
-                    if rates else "no published price"))
+                    if rates else "no rate reaches this name",
+                    "models.dev" if via == "models.dev" else
+                    ("override" if via else "-")))
     if args.json:
-        print(json.dumps(rows, indent=2))
+        print(json.dumps([dict(r, rates=prices.lookup(r["provider"], r["model"])) for r in rows],
+                         indent=2))
         return 0
     print(table(out, ("model", "provider", "harness", "list value", "responses",
-                      "$/M in/read/write/out")))
+                      "$/M in/read/write/out", "rate from")))
     return 0
 
 
@@ -922,7 +926,12 @@ def cmd_ai_doctor(args) -> int:
         print(rule("counted but not priced"))
         print(table([(r["harness"], r["provider"], r["model"], toks(r["tokens"])) for r in gap],
                     ("harness", "provider", "model", "tokens")))
-        print("  These models publish no per-token rate. Half a money figure is worse than none.")
+        print("  No rate reaches these names. Half a money figure is worse than none, so they\n"
+              f"  are excluded. Name them once in {hu.CONFIG / 'prices.tsv'}:")
+        for r in gap:
+            print(f"    {r['model']}\t<provider>/<model as models.dev names it>")
+        print("  or four rates instead — input, cache read, cache write, output, $ per million.\n"
+              f"  {hu.SEED} is the shipped example.")
 
     reported = [r for r in hu.totals(db, ("harness", "model")) if r["reported_cost"]]
     if reported:

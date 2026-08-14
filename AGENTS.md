@@ -167,6 +167,7 @@ tools/rig                     the CLI above
 tools/gen-dashboards.py       dashboard generator; --check verifies freshness
 tools/harness_usage.py        one reader per AI harness, and the price lookup
 tools/harness-exporter.py     serves that to Prometheus on :13360
+share/prices.tsv              model names that reach no models.dev entry
 docs/metrics.md               every series, explained
 docs/ai-usage.md              harness readers, token conventions, pricing rules
 docs/thermals.md              how dust detection works and when it lies

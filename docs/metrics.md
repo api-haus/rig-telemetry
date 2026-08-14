@@ -148,7 +148,7 @@ the readers, the token conventions and the pricing rules.
 | `rig:ai:sessions_live` | `harness` | Sessions whose state file moved recently |
 | `rig:ai:limit_used_ratio` | `harness`, `window`, `plan` | Subscription window consumed. Codex only. |
 | `rig:ai:limit_reset_in_seconds` | `harness`, `window` | Until that window resets |
-| `rig:ai:unpriced_tokens` | — | Tokens whose model publishes no rate, excluded from every figure |
+| `rig:ai:unpriced_tokens` | — | Tokens no rate reaches, excluded from every figure. `share/prices.tsv` names them. |
 | `rig:ai:scan_age_seconds` | — | Since the exporter last read the session files |
 
 `reasoning` is already inside `output`. It is reported and never priced.

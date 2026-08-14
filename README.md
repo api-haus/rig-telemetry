@@ -174,6 +174,7 @@ tools/rig                     the CLI
 tools/gen-dashboards.py       dashboard generator
 tools/harness_usage.py        one reader per AI harness, and the price lookup
 tools/harness-exporter.py     serves that to Prometheus
+share/prices.tsv              model names that reach no models.dev entry
 bin/rig                       PATH shim, added automatically by the plugin
 .claude-plugin/               plugin and marketplace manifests
 skills/                       rig-diagnose, rig-devenv, rig-thermals, rig-aicost

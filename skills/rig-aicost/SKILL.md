@@ -78,8 +78,14 @@ is a large share, say so — it is usually the surprise in the number.
 - Quote the role split when explaining a total. A number with no cause is not
   an answer.
 - `rig ai doctor` before claiming coverage. A harness with zero session files
-  is installed and silent, which is not the same as unused, and a model with no
-  published rate is excluded from every dollar figure by design.
+  is installed and silent, which is not the same as unused.
+- If doctor reports a model as counted but not priced, **fix it rather than
+  caveat it.** A plan name is not a model id — Kimi Code sends
+  `kimi-code/kimi-for-coding`, which is K2.7 Coding, which models.dev publishes
+  as `moonshotai/kimi-k2.7-code`. Find what the harness's own config calls it
+  (`display_name` in `~/.kimi-code/config.toml`, for instance), add one line to
+  `~/.config/rig-telemetry/prices.tsv`, and re-run. Doctor prints the line.
+  Prefer the alias form over four hard-coded rates, so the numbers stay current.
 - Expect about half of what Claude Code's own statistics report. Claude Code
   writes one transcript line per content block and each repeats the same usage
   block; this deduplicates on the message id because the response was billed

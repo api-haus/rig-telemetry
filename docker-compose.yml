@@ -152,6 +152,7 @@ services:
       RIG_AI_TOP_PROJECTS: "${RIG_AI_TOP_PROJECTS:-80}"
     volumes:
       - ./tools:/tools:ro
+      - ./share:/share:ro
       - ${RIG_AI_HOME:-${HOME}}:/host/home:ro
       - ${RIG_AI_CACHE:-${HOME}/.cache/rig-telemetry}:/var/lib/rig-ai
       # The ledger buckets by local day and `rig ai` on the host reads the same

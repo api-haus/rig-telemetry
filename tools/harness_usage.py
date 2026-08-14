@@ -29,6 +29,9 @@ from datetime import datetime, timezone
 HOME = pathlib.Path(os.environ.get("RIG_AI_HOME") or pathlib.Path.home())
 CACHE = pathlib.Path(os.environ.get("RIG_AI_CACHE") or
                      (pathlib.Path.home() / ".cache" / "rig-telemetry"))
+CONFIG = pathlib.Path(os.environ.get("XDG_CONFIG_HOME") or
+                      (pathlib.Path.home() / ".config")) / "rig-telemetry"
+SEED = pathlib.Path(__file__).resolve().parent.parent / "share" / "prices.tsv"
 CATALOGUE_URL = "https://models.dev/api.json"
 CATALOGUE_MAX_AGE = float(os.environ.get("RIG_AI_PRICES_MAX_AGE_DAYS", "7")) * 86400
 
@@ -91,16 +94,51 @@ class Scan:
 # prices
 # --------------------------------------------------------------------------
 
-class Prices:
-    """models.dev list rates, in dollars per million tokens.
+def price_key(model: str) -> str:
+    """The name an override is filed under: one that survives an env var."""
+    return "".join(c if c.isalnum() else "_" for c in model)
 
-    Nothing is guessed. A model with no published price is priced at zero and
-    counted as unpriced, so the gap is visible instead of silently folded into
-    a total that looks complete.
+
+def load_overrides() -> dict[str, tuple[str, str]]:
+    """Model name -> (value, where it came from), nearest source winning.
+
+    A harness names its models however it likes and some of those names reach
+    no catalogue entry by any transformation, so this file states what a name
+    is instead of the lookup guessing. Read every pass: fixing a price should
+    not need a restart.
+    """
+    out: dict[str, tuple[str, str]] = {}
+    for path in (SEED, CONFIG / "prices.tsv"):
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.split("#")[0].strip()
+            if not line:
+                continue
+            name, _, value = line.partition("\t")
+            if not value.strip():
+                name, _, value = line.partition(" ")
+            if value.strip():
+                out[price_key(name.strip())] = (value.strip(), str(path))
+    for key, value in os.environ.items():
+        if key.startswith("RIG_AI_PRICE_") and value.strip():
+            out[key[len("RIG_AI_PRICE_"):]] = (value.strip(), "environment")
+    return out
+
+
+class Prices:
+    """List rates in dollars per million tokens, from models.dev by default.
+
+    Nothing is guessed. A model with no published price and no override is
+    priced at zero and counted as unpriced, so the gap is visible instead of
+    silently folded into a total that looks complete.
     """
 
     def __init__(self, catalogue: dict | None = None):
         self.catalogue = catalogue if catalogue is not None else load_catalogue()
+        self.overrides = load_overrides()
         self._cache: dict[tuple[str, str], dict | None] = {}
         self.unpriced: set[tuple[str, str]] = set()
 
@@ -113,8 +151,11 @@ class Prices:
         return self._cache[key]
 
     def _resolve(self, provider: str, model: str) -> dict | None:
-        if not model or not self.catalogue:
+        if not model:
             return None
+        hit = self._override(model)
+        if hit or not self.catalogue:
+            return hit
         for name in self._variants(model):
             hit = self._in_provider(provider, name) if provider else None
             if hit:
@@ -123,6 +164,29 @@ class Prices:
             if hit:
                 return hit
         return None
+
+    def _override(self, model: str) -> dict | None:
+        """An override is either four rates or an alias into the catalogue.
+
+        The alias form is the one to prefer: it says what the model *is*, and
+        the rates then track models.dev instead of ageing in a file here.
+        """
+        found = self.overrides.get(price_key(model))
+        if not found:
+            return None
+        value, source = found
+        parts = value.split()
+        if len(parts) == 4:
+            try:
+                inp, cr, cw, out = (float(p) for p in parts)
+            except ValueError:
+                return None
+            return {"input": inp, "cache_read": cr, "cache_write": cw, "output": out,
+                    "source": f"{model} (rates)", "via": source}
+        provider, _, name = value.partition("/")
+        rates = self._in_provider(provider, name) if name else None
+        rates = rates or self._anywhere(name or provider)
+        return dict(rates, via=source) if rates else None
 
     @staticmethod
     def _variants(model: str):
@@ -167,6 +231,7 @@ class Prices:
             "cache_read": float(cost["cache_read"]) if cost.get("cache_read") is not None else inp,
             "cache_write": float(cost["cache_write"]) if cost.get("cache_write") is not None else inp,
             "source": f"{provider}/{model}",
+            "via": "models.dev",
         }
 
     def provider_of(self, provider: str, model: str) -> str:
@@ -1068,6 +1133,10 @@ def totals(db, group: tuple[str, ...] = (), since: str = "", until: str = "",
         row = dict(raw)
         rates = prices.lookup(row["provider"], row["model"])
         row["cost"] = sum(row[r] * rates[r] for r in BILLED_ROLES) / 1e6 if rates else 0.0
+        # The stored provider is what was known when the row was written. An
+        # override added since can name it properly, and rows that were split
+        # across the two spellings fold back together here.
+        row["provider"] = rates["source"].split("/")[0] if rates else (row["provider"] or "unknown")
         key = tuple(row[k] for k in group)
         acc = folded.get(key)
         if acc is None:

@@ -156,6 +156,9 @@ def render(db, scan: hu.Scan, prices: hu.Prices) -> str:
          [({}, time.time() - path.stat().st_mtime if path.is_file() else -1)])
     emit("aiusage_prices_models", "gauge", "Providers in the price catalogue.",
          [({}, len(prices.catalogue))])
+    emit("aiusage_price_overrides", "gauge",
+         "Model names given a rate by hand, because no catalogue entry matches them.",
+         [({}, len(prices.overrides))])
     return "\n".join(out) + "\n"
 
 
