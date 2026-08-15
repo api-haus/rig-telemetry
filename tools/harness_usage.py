@@ -78,6 +78,11 @@ class Rec:
         """The local day. "What did I spend yesterday" means the one you lived."""
         return datetime.fromtimestamp(self.ts).strftime("%Y-%m-%d")
 
+    def utc_slot(self) -> str:
+        """The UTC hour. A seller that moves its price on a clock moves it on
+        its own, so the ledger keeps the hour the seller was billing in."""
+        return datetime.fromtimestamp(self.ts, timezone.utc).strftime("%Y-%m-%dT%H")
+
 
 @dataclass
 class Scan:
@@ -104,16 +109,20 @@ def price_key(model: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in model)
 
 
-def load_overrides() -> dict[str, tuple[str, str]]:
-    """Model name -> (value, where it came from), nearest source winning.
+def load_overrides() -> dict[str, list[tuple[str, str, int]]]:
+    """Model name -> the lines filed under it, as (value, source, rank).
 
     A harness names its models however it likes and some of those names reach
     no catalogue entry by any transformation, so this file states what a name
     is instead of the lookup guessing. Read every pass: fixing a price should
     not need a restart.
+
+    One name can carry several lines, because one model can carry several
+    prices — a rate that starts on a date, or only inside certain hours. The
+    rank is how near the source is; `lookup` decides which line answers.
     """
-    out: dict[str, tuple[str, str]] = {}
-    for path in (SEED, CONFIG / "prices.tsv"):
+    out: dict[str, list[tuple[str, str, int]]] = {}
+    for rank, path in enumerate((SEED, CONFIG / "prices.tsv")):
         try:
             text = path.read_text()
         except OSError:
@@ -126,11 +135,51 @@ def load_overrides() -> dict[str, tuple[str, str]]:
             if not value.strip():
                 name, _, value = line.partition(" ")
             if value.strip():
-                out[price_key(name.strip())] = (value.strip(), str(path))
+                out.setdefault(price_key(name.strip()), []).append(
+                    (value.strip(), str(path), rank))
     for key, value in os.environ.items():
         if key.startswith("RIG_AI_PRICE_") and value.strip():
-            out[key[len("RIG_AI_PRICE_"):]] = (value.strip(), "environment")
+            out.setdefault(key[len("RIG_AI_PRICE_"):], []).append(
+                (value.strip(), "environment", 2))
     return out
+
+
+# A rate line ends in any of these, each two words. `from` and `at` are read on
+# the seller's clock, which is UTC on every price page that publishes one.
+CLAUSES = ("from", "at", "on")
+
+
+def _instant(text: str) -> float:
+    """A UTC instant, as a price page writes it: 2026-08-16T16:00Z."""
+    return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+
+
+def _hours(text: str) -> tuple[int, ...]:
+    """UTC hour ranges, half-open, as a clock reads them: `01-04,06-10` is
+    01:00 up to 04:00 and 06:00 up to 10:00, so hours 1-3 and 6-9."""
+    out: set[int] = set()
+    for span in text.split(","):
+        first, _, last = span.partition("-")
+        out.update(range(int(first), int(last) if last else int(first) + 1))
+    return tuple(sorted(out))
+
+
+_READ_CLAUSE = {"from": _instant, "at": _hours, "on": str}
+_NO_CLAUSE = {"from": None, "at": None, "on": None}
+
+
+def split_clauses(value: str) -> tuple[str, dict]:
+    """Peel the trailing clauses off a price line, leaving the rates."""
+    words, clauses = value.split(), dict(_NO_CLAUSE)
+    while len(words) >= 2 and words[-2] in CLAUSES and clauses[words[-2]] is None:
+        clauses[words[-2]] = _READ_CLAUSE[words[-2]](words[-1])
+        words = words[:-2]
+    return " ".join(words), clauses
+
+
+def slot_instant(slot: str) -> float:
+    """The start of a ledger row's UTC hour."""
+    return datetime.strptime(slot, "%Y-%m-%dT%H").replace(tzinfo=timezone.utc).timestamp()
 
 
 class Prices:
@@ -144,54 +193,88 @@ class Prices:
     def __init__(self, catalogue: dict | None = None):
         self.catalogue = catalogue if catalogue is not None else load_catalogue()
         self.overrides = load_overrides()
-        self._cache: dict[tuple[str, str], dict | None] = {}
+        self._cache: dict[tuple[str, str], list[dict]] = {}
         self.unpriced: set[tuple[str, str]] = set()
 
-    def lookup(self, provider: str, model: str) -> dict | None:
+    def lookup(self, provider: str, model: str, when: float | None = None) -> dict | None:
+        """The rate in force at `when`, or now.
+
+        A seller that moves its price on a clock is followed on that clock
+        rather than averaged over it, so this needs to know which hour it is
+        pricing. Of the rules that fit, the nearest source wins, then the
+        latest start date, then the one that names hours.
+        """
+        rules = self._rules(provider, model)
+        if not rules:
+            return None
+        ts = time.time() if when is None else when
+        hour = datetime.fromtimestamp(ts, timezone.utc).hour
+        fit = [r for r in rules
+               if (r["on"] is None or r["on"] == provider)
+               and (r["from"] is None or r["from"] <= ts)
+               and (r["at"] is None or hour in r["at"])]
+        if not fit:
+            return None
+        return max(fit, key=lambda r: (r["rank"], r["from"] or 0.0, r["at"] is not None))
+
+    def _rules(self, provider: str, model: str) -> list[dict]:
         key = (provider, model)
         if key not in self._cache:
             self._cache[key] = self._resolve(provider, model)
-            if self._cache[key] is None:
+            if not self._cache[key]:
                 self.unpriced.add(key)
         return self._cache[key]
 
-    def _resolve(self, provider: str, model: str) -> dict | None:
+    def _resolve(self, provider: str, model: str) -> list[dict]:
+        """Every rate that could apply to this model, most local last resort."""
         if not model:
-            return None
-        hit = self._override(model)
-        if hit or not self.catalogue:
-            return hit
+            return []
+        rules = self._override_rules(model)
+        return rules + self._catalogue_rules(provider, model)
+
+    def _catalogue_rules(self, provider: str, model: str) -> list[dict]:
+        if not self.catalogue:
+            return []
         for name in self._variants(model):
             hit = self._in_provider(provider, name) if provider else None
+            hit = hit or self._anywhere(name)
             if hit:
-                return hit
-            hit = self._anywhere(name)
-            if hit:
-                return hit
-        return None
+                return [dict(hit, rank=-1, **_NO_CLAUSE)]
+        return []
 
-    def _override(self, model: str) -> dict | None:
+    def _override_rules(self, model: str) -> list[dict]:
         """An override is either four rates or an alias into the catalogue.
 
         The alias form is the one to prefer: it says what the model *is*, and
-        the rates then track models.dev instead of ageing in a file here.
+        the rates then track models.dev instead of ageing in a file here. Only
+        the rate form takes clauses — an alias says what a model is, which no
+        hour of the day changes.
         """
-        found = self.overrides.get(price_key(model))
-        if not found:
-            return None
-        value, source = found
-        parts = value.split()
-        if len(parts) == 4:
+        out = []
+        for value, source, rank in self.overrides.get(price_key(model), ()):
             try:
-                inp, cr, cw, out = (float(p) for p in parts)
+                head, clauses = split_clauses(value)
             except ValueError:
-                return None
-            return {"input": inp, "cache_read": cr, "cache_write": cw, "output": out,
-                    "source": f"{model} (rates)", "via": source}
-        provider, _, name = value.partition("/")
-        rates = self._in_provider(provider, name) if name else None
-        rates = rates or self._anywhere(name or provider)
-        return dict(rates, via=source) if rates else None
+                continue
+            parts = head.split()
+            if len(parts) == 4:
+                try:
+                    inp, cr, cw, tail = (float(p) for p in parts)
+                except ValueError:
+                    continue
+                # Four rates name no catalogue entry, so the only provider such
+                # a line knows is the one it scoped itself to.
+                rates = {"provider": clauses["on"] or "", "input": inp, "cache_read": cr,
+                         "cache_write": cw, "output": tail, "source": f"{model} (rates)"}
+            else:
+                provider, _, name = head.partition("/")
+                hit = self._in_provider(provider, name) if name else None
+                hit = hit or self._anywhere(name or provider)
+                if not hit:
+                    continue
+                rates = dict(hit)
+            out.append(dict(rates, via=source, rank=rank, **clauses))
+        return out
 
     @staticmethod
     def _variants(model: str):
@@ -229,6 +312,7 @@ class Prices:
     def _rates(cost: dict, provider: str, model: str) -> dict:
         inp = float(cost.get("input") or 0)
         return {
+            "provider": provider,
             "input": inp,
             "output": float(cost.get("output") or 0),
             # A cache rate nobody publishes is not a reason to stay silent —
@@ -241,9 +325,7 @@ class Prices:
 
     def provider_of(self, provider: str, model: str) -> str:
         rates = self.lookup(provider, model)
-        if rates:
-            return rates["source"].split("/")[0]
-        return provider or "unknown"
+        return (rates and rates["provider"]) or provider or "unknown"
 
 
 def catalogue_path() -> pathlib.Path:
@@ -305,13 +387,16 @@ def fetch_catalogue() -> int:
 # only to what is scanned afterwards.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS usage (
-  day TEXT, harness TEXT, provider TEXT, model TEXT, project TEXT, kind TEXT,
+  -- `day` is local because a spending day is the one you lived; `utc_slot` is
+  -- the seller's hour, the grain a peak/off-peak rate is billed at.
+  day TEXT, utc_slot TEXT,
+  harness TEXT, provider TEXT, model TEXT, project TEXT, kind TEXT,
   path TEXT,
   input INTEGER DEFAULT 0, output INTEGER DEFAULT 0,
   cache_read INTEGER DEFAULT 0, cache_write INTEGER DEFAULT 0,
   reasoning INTEGER DEFAULT 0, requests INTEGER DEFAULT 0,
   reported_cost REAL DEFAULT 0,
-  PRIMARY KEY (day, harness, provider, model, project, kind, path)
+  PRIMARY KEY (day, utc_slot, harness, provider, model, project, kind, path)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS usage_day ON usage(day);
 CREATE INDEX IF NOT EXISTS usage_path ON usage(path);
@@ -327,7 +412,7 @@ def ledger_path() -> pathlib.Path:
     return CACHE / "ai-usage.db"
 
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 
 def open_ledger(read_only: bool = False) -> sqlite3.Connection:
@@ -1195,7 +1280,8 @@ def _scan_locked(db, prices, src: Source, path: pathlib.Path) -> int:
                 continue
             db.execute("INSERT OR IGNORE INTO seen VALUES (?)", (uid,))
         rec.provider = prices.provider_of(rec.provider, rec.model)
-        k = (rec.day(), rec.harness, rec.provider, rec.model or "unknown", rec.project, rec.kind)
+        k = (rec.day(), rec.utc_slot(), rec.harness, rec.provider,
+             rec.model or "unknown", rec.project, rec.kind)
         acc = rows.setdefault(k, [0.0] * 7)
         for i, name in enumerate(TOKEN_ROLES):
             acc[i] += getattr(rec, name)
@@ -1205,8 +1291,9 @@ def _scan_locked(db, prices, src: Source, path: pathlib.Path) -> int:
 
     for k, acc in rows.items():
         db.execute("""
-            INSERT INTO usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT (day, harness, provider, model, project, kind, path) DO UPDATE SET
+            INSERT INTO usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT (day, utc_slot, harness, provider, model, project, kind, path)
+            DO UPDATE SET
               input = input + excluded.input, output = output + excluded.output,
               cache_read = cache_read + excluded.cache_read,
               cache_write = cache_write + excluded.cache_write,
@@ -1226,18 +1313,21 @@ def _scan_locked(db, prices, src: Source, path: pathlib.Path) -> int:
 SUM_COLUMNS = ("input", "output", "cache_read", "cache_write", "reasoning",
                "requests", "reported_cost")
 BILLED_ROLES = ("input", "output", "cache_read", "cache_write")
+COST_COLUMNS = ("cost", *(f"cost_{role}" for role in BILLED_ROLES))
 
 
 def totals(db, group: tuple[str, ...] = (), since: str = "", until: str = "",
            where: dict[str, str] | None = None, prices: "Prices | None" = None) -> list[dict]:
     """Sum the ledger, grouped by whichever label columns are asked for.
 
-    The SQL always groups by provider and model as well, because that is what
-    a rate is looked up by; the result is priced and then folded down to the
-    grouping that was asked for.
+    The SQL always groups by provider, model and the UTC hour as well, because
+    that is what a rate is looked up by; the result is priced and then folded
+    down to the grouping that was asked for. Every row carries `cost` and a
+    `cost_<role>` per billed role, so nobody downstream has to re-apply a rate
+    to a sum whose hours have already been folded together.
     """
     prices = prices if prices is not None else Prices(load_catalogue(refresh=False))
-    inner = tuple(dict.fromkeys(group + ("provider", "model")))
+    inner = tuple(dict.fromkeys(group + ("provider", "model", "utc_slot")))
     cols = ", ".join(inner)
     sums = ", ".join(f"SUM({c}) AS {c}" for c in SUM_COLUMNS)
     sql = f"SELECT {cols}, {sums} FROM usage"
@@ -1258,23 +1348,25 @@ def totals(db, group: tuple[str, ...] = (), since: str = "", until: str = "",
     folded: dict[tuple, dict] = {}
     for raw in db.execute(sql, params):
         row = dict(raw)
-        rates = prices.lookup(row["provider"], row["model"])
-        row["cost"] = sum(row[r] * rates[r] for r in BILLED_ROLES) / 1e6 if rates else 0.0
+        rates = prices.lookup(row["provider"], row["model"], slot_instant(row["utc_slot"]))
+        row["cost"] = 0.0
+        for role in BILLED_ROLES:
+            row[f"cost_{role}"] = row[role] * rates[role] / 1e6 if rates else 0.0
+            row["cost"] += row[f"cost_{role}"]
         # The stored provider is what was known when the row was written. An
         # override added since can name it properly, and rows that were split
         # across the two spellings fold back together here.
-        row["provider"] = rates["source"].split("/")[0] if rates else (row["provider"] or "unknown")
+        row["provider"] = (rates and rates["provider"]) or row["provider"] or "unknown"
         key = tuple(row[k] for k in group)
         acc = folded.get(key)
         if acc is None:
-            folded[key] = {**{k: row[k] for k in group}, "cost": row["cost"],
-                           **{c: row[c] for c in SUM_COLUMNS}}
+            folded[key] = {**{k: row[k] for k in group},
+                           **{c: row[c] for c in COST_COLUMNS + SUM_COLUMNS}}
         else:
-            acc["cost"] += row["cost"]
-            for c in SUM_COLUMNS:
+            for c in COST_COLUMNS + SUM_COLUMNS:
                 acc[c] += row[c]
     return sorted(folded.values(), key=lambda r: -r["cost"]) if group else \
-        list(folded.values()) or [dict.fromkeys(("cost",) + SUM_COLUMNS, 0)]
+        list(folded.values()) or [dict.fromkeys(COST_COLUMNS + SUM_COLUMNS, 0)]
 
 
 def day_bounds(db) -> tuple[str, str]:

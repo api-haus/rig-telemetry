@@ -11,6 +11,14 @@
 # it. The second form is four rates in dollars per million tokens — input,
 # cache read, cache write, output — for a model nobody publishes.
 #
+# A rate line may end in any of `from <UTC instant>`, `at <UTC hours>` and
+# `on <provider>`, for a seller whose price moves on a calendar or a clock.
+# Hour ranges are half-open, as a clock reads them: `01-04` is 01:00 up to
+# 04:00. Several lines may name one model; of those that fit the moment being
+# priced, the nearest source wins, then the latest `from`, then the one that
+# names hours. Nothing fits means the catalogue answers, so a rate that starts
+# on a date leaves the history before it alone.
+#
 # Precedence, highest first:
 #   RIG_AI_PRICE_<model with non-alphanumerics as underscores>  (environment)
 #   ~/.config/rig-telemetry/prices.tsv                          (yours)
@@ -25,3 +33,13 @@ kimi-code/kimi-for-coding	moonshotai/kimi-k2.7-code
 kimi-code/kimi-for-coding-highspeed	moonshotai/kimi-k2.7-code-highspeed
 kimi-for-coding	moonshotai/kimi-k2.7-code
 kimi-for-coding-highspeed	moonshotai/kimi-k2.7-code-highspeed
+
+# DeepSeek bills peak and off-peak from 16:00 UTC on 2026-08-16, off-peak at
+# half the peak rate. Peak is 01:00-04:00 and 06:00-10:00 UTC. models.dev
+# publishes one number per model and cannot say which, so the clock lives here.
+# Cache write repeats the input rate: DeepSeek charges a miss at plain input.
+# https://api-docs.deepseek.com/quick_start/pricing
+deepseek-v4-pro	0.66 0.022 0.66 1.98 from 2026-08-16T16:00Z on deepseek
+deepseek-v4-pro	1.32 0.044 1.32 3.96 from 2026-08-16T16:00Z at 01-04,06-10 on deepseek
+deepseek-v4-flash	0.22 0.007 0.22 0.66 from 2026-08-16T16:00Z on deepseek
+deepseek-v4-flash	0.44 0.014 0.44 1.32 from 2026-08-16T16:00Z at 01-04,06-10 on deepseek

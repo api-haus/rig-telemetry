@@ -140,6 +140,40 @@ some-private-model	0.95 0.19 0.95 4
 instead of ageing in a file here. The four-number form — input, cache read,
 cache write, output, dollars per million — is for a model nobody publishes.
 
+### When the price moves on a clock
+
+DeepSeek bills peak and off-peak. From 16:00 UTC on 2026-08-16 the same
+million tokens cost twice as much between 01:00 and 04:00 UTC, and again
+between 06:00 and 10:00, as they do the rest of the day. models.dev publishes
+one number per model and has nowhere to say which, so a rate line can carry
+its own clock:
+
+```
+deepseek-v4-pro	0.66 0.022 0.66 1.98 from 2026-08-16T16:00Z on deepseek
+deepseek-v4-pro	1.32 0.044 1.32 3.96 from 2026-08-16T16:00Z at 01-04,06-10 on deepseek
+```
+
+| Clause | |
+| --- | --- |
+| `from <UTC instant>` | the rate starts here, and nothing before it is repriced |
+| `at <UTC hours>` | only inside these hours; half-open, so `01-04` is 01:00 up to 04:00 |
+| `on <provider>` | only when this provider served it |
+
+Several lines may name one model. Of those that fit the moment being priced,
+the nearest source wins, then the latest `from`, then the one that names
+hours. **Nothing fits means the catalogue answers** — which is why the two
+lines above leave every DeepSeek response before the cutover priced at the
+rate that was actually charged.
+
+`on` matters because a model is sold by more than one seller. The same
+`deepseek-v4-pro` through OpenRouter is billed at OpenRouter's own published
+rate, on no clock, and `on deepseek` is what keeps DeepSeek's clock off it.
+
+The ledger keeps the UTC hour of every response beside the local day for this
+reason — the day you lived answers "what did I spend yesterday", and the
+seller's hour is the grain a peak rate is billed at. `rig ai doctor` prints
+every rate that moves, and when.
+
 **Nothing is guessed.** A model that no tier reaches is counted in tokens and
 excluded from every dollar figure, and `rig ai doctor` prints the exact line
 that fixes it. Half a money figure is worse than none.
@@ -277,6 +311,11 @@ It is a cache, not a record: every row is derived from a file that is still on
 disk, so it can be deleted at any time and rebuilt with `rig ai scan`. A schema
 change rebuilds it automatically.
 
+**A row is one hour of one thing.** `day` is your local day, because a
+spending day is the one you lived. `utc_slot` is the same moment on the
+seller's clock, because that is the grain a peak/off-peak rate is billed at.
+Both are in the key; everything coarser is folded up at read time.
+
 **Files are keyed relative to `$HOME`, not by absolute path.** The container
 reaches the same file at `/host/home/…` that the host reaches at `/home/you/…`.
 Keyed absolutely, each scanner read it as a file the other had never seen, and
@@ -335,4 +374,6 @@ every reader so the blank is visible.
 
 **Rates change.** The figure is today's list price applied to old tokens, not
 the price on the day. That is the right choice for "is this project expensive"
-and the wrong one for reconstructing an invoice.
+and the wrong one for reconstructing an invoice. A rate line carrying `from`
+is the exception: it reprices nothing before its own start date, so a
+published price change is followed rather than backdated.

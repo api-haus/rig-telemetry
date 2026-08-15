@@ -84,7 +84,7 @@ def render(db, scan: hu.Scan, prices: hu.Prices) -> str:
         requests.append((tags, row["requests"]))
         if row["reported_cost"]:
             reported.append((tags, row["reported_cost"]))
-    costs = cost_by_role(by_model, model_key, prices)
+    costs = cost_by_role(by_model, model_key)
 
     emit("aiusage_tokens_total", "counter",
          "Tokens exchanged with a model. reasoning is already inside output and is never priced.",
@@ -162,7 +162,7 @@ def render(db, scan: hu.Scan, prices: hu.Prices) -> str:
     return "\n".join(out) + "\n"
 
 
-def cost_by_role(rows, key, prices: hu.Prices) -> list:
+def cost_by_role(rows, key) -> list:
     """Cost split the way the tokens are, so the dear role is visible.
 
     Only the four billed roles appear: reasoning tokens are already inside
@@ -170,14 +170,10 @@ def cost_by_role(rows, key, prices: hu.Prices) -> list:
     """
     out = []
     for row in rows:
-        rates = prices.lookup(row["provider"], row["model"])
-        if not rates:
-            continue
         tags = {k: row[k] for k in key}
-        for role in ("input", "output", "cache_read", "cache_write"):
-            value = row[role] * rates[role] / 1e6
-            if value:
-                out.append(({**tags, "role": role}, value))
+        for role in hu.BILLED_ROLES:
+            if row[f"cost_{role}"]:
+                out.append(({**tags, "role": role}, row[f"cost_{role}"]))
     return out
 
 

@@ -757,10 +757,9 @@ def _role_costs(hu, db, since: str, prices):
     """Cost per token role, priced the same way the exporter prices it."""
     acc: dict[str, list[float]] = {}
     for row in hu.totals(db, ("provider", "model"), since=since, prices=prices):
-        rates = prices.lookup(row["provider"], row["model"])
         for role in hu.BILLED_ROLES:
             cell = acc.setdefault(role, [0.0, 0.0])
-            cell[0] += row[role] * rates[role] / 1e6 if rates else 0.0
+            cell[0] += row[f"cost_{role}"]
             cell[1] += row[role]
     return sorted(((role, c, t) for role, (c, t) in acc.items()), key=lambda r: -r[1])
 
@@ -817,10 +816,12 @@ def cmd_ai_models(args) -> int:
     since = _since_day(args)
     rows = hu.totals(db, ("provider", "model", "harness"), since=since)
     prices = hu.Prices(hu.load_catalogue(refresh=False))
-    out = []
+    out, clocked = [], []
     for r in rows:
         rates = prices.lookup(r["provider"], r["model"])
         via = rates["via"] if rates else ""
+        if rates and (rates["at"] or rates["from"]):
+            clocked.append(r["model"])
         out.append((r["model"], r["provider"], r["harness"], money(r["cost"]),
                     f"{r['requests']:,.0f}",
                     f"{rates['input']:g}/{rates['cache_read']:g}/{rates['cache_write']:g}/{rates['output']:g}"
@@ -833,6 +834,11 @@ def cmd_ai_models(args) -> int:
         return 0
     print(table(out, ("model", "provider", "harness", "list value", "responses",
                       "$/M in/read/write/out", "rate from")))
+    if clocked:
+        # The list value column is priced hour by hour; the rate column is one
+        # rate, and a seller on a clock has a different one in an hour.
+        print(rule(f"{', '.join(dict.fromkeys(clocked))} is sold on a clock — "
+                   "the rate shown is the one in force now"))
     return 0
 
 
@@ -946,6 +952,48 @@ def _ai_verify(hu, db) -> int:
     return 0
 
 
+def _hour_ranges(hours) -> str:
+    """Hours back as the half-open clock ranges they were written as."""
+    spans, start = [], None
+    for hour in list(hours) + [None]:
+        if start is None:
+            start = last = hour
+        elif hour == last + 1:
+            last = hour
+        else:
+            spans.append(f"{start:02d}-{last + 1:02d}")
+            start = last = hour
+    return ",".join(spans)
+
+
+def _clocked_rates(hu) -> None:
+    """Every rate that moves on a calendar or a clock, and when it moves.
+
+    A price that changes at 16:00 on a Sunday is the one nobody can see in a
+    total, so it is stated here rather than left to be inferred from a bill.
+    """
+    rows = []
+    for key, lines in sorted(hu.load_overrides().items()):
+        for value, source, _ in lines:
+            try:
+                head, clause = hu.split_clauses(value)
+            except ValueError:
+                continue
+            if clause["from"] is None and clause["at"] is None:
+                continue
+            hours = _hour_ranges(clause["at"]) if clause["at"] else "every hour"
+            start = datetime.fromtimestamp(clause["from"], timezone.utc) if clause["from"] else None
+            rows.append((key.replace("_", "-"), head,
+                         start.strftime("%Y-%m-%d %H:%MZ") if start else "always",
+                         hours, clause["on"] or "any provider",
+                         pathlib.Path(source).name if source != "environment" else source))
+    if rows:
+        print()
+        print(rule("rates that move on a clock"))
+        print(table(rows, ("model", "$/M in/read/write/out", "from", "UTC hours",
+                           "provider", "stated in")))
+
+
 def cmd_ai_doctor(args) -> int:
     """Where every number came from, and what is missing."""
     import harness_usage as hu
@@ -970,6 +1018,7 @@ def cmd_ai_doctor(args) -> int:
         print(f"  {path}")
     else:
         print("  no catalogue. no money figures until one is fetched: rig ai scan --fetch-prices")
+    _clocked_rates(hu)
 
     try:
         _, db = _ledger(args)
@@ -1108,7 +1157,6 @@ def cmd_ai_backfill(args) -> int:
     # own job/instance carried over, or these would be different series that
     # double-count wherever the backfilled range meets the live one. The pair
     # is read back from a live sample rather than assumed.
-    prices = hu.Prices(hu.load_catalogue(refresh=False))
     scraped = query("aiusage_cost_usd_total")
     fixed = scraped[0]["metric"] if scraped else {}
     common = f'job="{fixed.get("job", "harness")}",instance="{fixed.get("instance", "rig")}"'
@@ -1122,13 +1170,12 @@ def cmd_ai_backfill(args) -> int:
     for day in sorted(by_day):
         for r in by_day[day]:
             key = tuple(r[c] for c in key_cols[1:])
-            rates = prices.lookup(r["provider"], r["model"])
             acc = running.setdefault(key, {"requests": 0.0, **dict.fromkeys(
                 [f"{w}_{role}" for role in hu.BILLED_ROLES for w in ("tok", "usd")], 0.0)})
             acc["requests"] += r["requests"]
             for role in hu.BILLED_ROLES:
                 acc[f"tok_{role}"] += r[role]
-                acc[f"usd_{role}"] += r[role] * rates[role] / 1e6 if rates else 0.0
+                acc[f"usd_{role}"] += r[f"cost_{role}"]
         midnight = int(datetime.strptime(day, "%Y-%m-%d").timestamp())
         for offset in range(0, 86400, step):
             stamp = midnight + offset
