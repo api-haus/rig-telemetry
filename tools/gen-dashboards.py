@@ -241,12 +241,14 @@ def hour_spans(hours) -> list[list[int]]:
 
 
 def _annotation(name, expr, colour, step) -> dict:
+    # useValueForTime must stay a JSON boolean: Grafana tests it for truth, and
+    # the string "false" would send every marker to 1970.
     return {
         "name": name, "datasource": DS, "enable": True, "hide": False,
         "iconColor": colour, "expr": expr, "step": step,
-        "target": {"expr": expr, "refId": "peak", "legendFormat": ""},
+        "target": {"expr": expr, "refId": "peak", "interval": step, "legendFormat": ""},
         "titleFormat": name, "textFormat": "", "tagKeys": "",
-        "useValueForTime": "false",
+        "useValueForTime": False,
     }
 
 
@@ -261,13 +263,16 @@ def peak_annotations(seller, hours, start) -> list[dict]:
     began = f"(vector(time()) >= {int(start)})"
     inside = " or ".join(f"(hour() >= {a} and hour() < {b})" for a, b in spans)
 
-    # A line needs exactly one sample; two consecutive ones draw a region instead.
+    # A line needs exactly one sample; Grafana joins any two under `step` apart
+    # into a region. Every expression yields 1, never hour(), because a sample
+    # worth 0 — midnight, in a window that reached it — is dropped as inactive.
     flips = sorted({s % 24 for span in spans for s in span})
     at_flip = " or ".join(f"hour() == {h}" for h in flips)
     return [
-        _annotation(f"{seller} peak hours", f"({inside}) and {began}",
+        _annotation(f"{seller} peak hours", f"vector(1) and (({inside}) and {began})",
                     "rgba(255, 152, 0, 0.20)", "300s"),
-        _annotation(f"{seller} rate change", f"(({at_flip}) and minute() < 15) and {began}",
+        _annotation(f"{seller} rate change",
+                    f"vector(1) and ((({at_flip}) and minute() < 15) and {began})",
                     "rgb(255, 152, 0)", "900s"),
     ]
 

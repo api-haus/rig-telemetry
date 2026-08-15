@@ -212,12 +212,28 @@ they mark a week that has already been paid for — a rule would only know the
 hours since it was added — and both start at the `from` instant, so nothing
 before the cutover is marked.
 
-Grafana draws consecutive annotation samples as a region and an isolated one as
-a line, so the two differ only in how sparse the query is. The line query runs
-at a 900s step and keeps the sample inside the first quarter of the hour: that
-returns exactly one sample per flip however Grafana aligns the range, places it
-within 15 minutes of the hour in the worst case, and still reaches back 114
-days before hitting Prometheus's 11,000-point ceiling.
+Both are the same kind of object. Grafana's Prometheus annotation support
+(`packages/grafana-prometheus/src/annotations.ts`) drops every sample whose
+value is not above zero, then walks what is left: *"Instead of creating
+singular annotation for each active event we group events into region if they
+are less or equal to `step` apart."* An event that never gets extended keeps
+`timeEnd == time` and draws as a vertical line; one that does gets a `timeEnd`
+later than its `time` and draws as a shaded region.
+
+So the difference between the band and the line is only how sparse the query
+is against its own step:
+
+- The band runs at a 300s step and matches every peak hour, so its samples are
+  exactly one step apart and merge into one region per window.
+- The line runs at a 900s step and matches only the first quarter of an hour a
+  flip happens in, so it returns one sample per flip, hours from its
+  neighbours, and each stays a point.
+
+Two consequences worth keeping. Every expression is wrapped in `vector(1) and
+(…)` rather than returning `hour()`, because a window that reached midnight
+would return the value 0 there and be silently dropped as inactive. And
+`useValueForTime` must be a JSON boolean: Grafana tests it for truth, so the
+string `"false"` is true and sends every marker to 1970.
 
 **Nothing is guessed.** A model that no tier reaches is counted in tokens and
 excluded from every dollar figure, and `rig ai doctor` prints the exact line

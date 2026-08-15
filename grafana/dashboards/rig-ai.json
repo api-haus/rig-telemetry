@@ -2273,17 +2273,18 @@
         "enable": true,
         "hide": false,
         "iconColor": "rgba(255, 152, 0, 0.20)",
-        "expr": "((hour() >= 1 and hour() < 4) or (hour() >= 6 and hour() < 10)) and (vector(time()) >= 1786896000)",
+        "expr": "vector(1) and (((hour() >= 1 and hour() < 4) or (hour() >= 6 and hour() < 10)) and (vector(time()) >= 1786896000))",
         "step": "300s",
         "target": {
-          "expr": "((hour() >= 1 and hour() < 4) or (hour() >= 6 and hour() < 10)) and (vector(time()) >= 1786896000)",
+          "expr": "vector(1) and (((hour() >= 1 and hour() < 4) or (hour() >= 6 and hour() < 10)) and (vector(time()) >= 1786896000))",
           "refId": "peak",
+          "interval": "300s",
           "legendFormat": ""
         },
         "titleFormat": "deepseek peak hours",
         "textFormat": "",
         "tagKeys": "",
-        "useValueForTime": "false"
+        "useValueForTime": false
       },
       {
         "name": "deepseek rate change",
@@ -2294,17 +2295,18 @@
         "enable": true,
         "hide": false,
         "iconColor": "rgb(255, 152, 0)",
-        "expr": "((hour() == 1 or hour() == 4 or hour() == 6 or hour() == 10) and minute() < 15) and (vector(time()) >= 1786896000)",
+        "expr": "vector(1) and (((hour() == 1 or hour() == 4 or hour() == 6 or hour() == 10) and minute() < 15) and (vector(time()) >= 1786896000))",
         "step": "900s",
         "target": {
-          "expr": "((hour() == 1 or hour() == 4 or hour() == 6 or hour() == 10) and minute() < 15) and (vector(time()) >= 1786896000)",
+          "expr": "vector(1) and (((hour() == 1 or hour() == 4 or hour() == 6 or hour() == 10) and minute() < 15) and (vector(time()) >= 1786896000))",
           "refId": "peak",
+          "interval": "900s",
           "legendFormat": ""
         },
         "titleFormat": "deepseek rate change",
         "textFormat": "",
         "tagKeys": "",
-        "useValueForTime": "false"
+        "useValueForTime": false
       }
     ]
   }
