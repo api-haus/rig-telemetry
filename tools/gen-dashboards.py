@@ -564,13 +564,19 @@ def ai():
     L.row("Where the money goes")
     ts(L, "Spend by token role", [
         (f"sum by (role) (increase({money}[$__rate_interval]))", "{{role}}"),
-    ], unit="currencyUSD", stack=True, w=12, min_interval=HARNESS_STEP,
+    ], unit="currencyUSD", stack=True, w=8, min_interval=HARNESS_STEP,
        desc=("cache_read is normally the largest by far: a running context is re-sent on every "
              "request, so cost is context size times request count. cache_write spikes when a "
              "prompt cache lapses and the whole window is paid for again."))
     ts(L, "Spend by harness", [
         (f"sum by (harness) (increase({money}[$__rate_interval]))", "{{harness}}"),
-    ], unit="currencyUSD", stack=True, w=12, min_interval=HARNESS_STEP)
+    ], unit="currencyUSD", stack=True, w=8, min_interval=HARNESS_STEP)
+    ts(L, "Spend by model", [
+        (f"topk(8, sum by (model) (increase({money}[$__rate_interval])))", "{{model}}"),
+    ], unit="currencyUSD", stack=True, w=8, min_interval=HARNESS_STEP,
+       desc=("The eight dearest in the window. A model is summed across whichever provider "
+             "served it, so the Provider dropdown is what separates the same model bought "
+             "from two sellers."))
     # The counters carry a harness label too; leaving it in the `by` draws one
     # bar per harness under the same name.
     bars(L, "Total by project",
