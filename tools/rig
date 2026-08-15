@@ -1000,6 +1000,23 @@ def _at_hour(after: float, hour: int) -> float:
     return day.replace(hour=hour, minute=0, second=0, microsecond=0).timestamp()
 
 
+def _next_change(prices, provider: str, model: str, now: float) -> tuple[float, dict] | None:
+    """The next instant this model bills at a rate other than the one in force.
+
+    Walked hour by hour rather than reasoned about, because a clock and a start
+    date can both land on the same hour and only the lookup knows which wins.
+    """
+    rates = lambda r: r and tuple(r[k] for k in ("input", "cache_read", "cache_write", "output"))
+    now_on = rates(prices.lookup(provider, model, now))
+    top = datetime.fromtimestamp(now, timezone.utc).replace(minute=0, second=0, microsecond=0)
+    for ahead in range(1, 24 * 8 + 1):
+        moment = (top + timedelta(hours=ahead)).timestamp()
+        later = prices.lookup(provider, model, moment)
+        if rates(later) != now_on:
+            return moment, later
+    return None
+
+
 def _local_hours(hours: tuple[int, ...], when: float) -> str:
     """A fixed UTC window as the wall clock reads it, at that date's offset.
 
@@ -1052,7 +1069,15 @@ def cmd_ai_clock(args) -> int:
         exposure = sum(v for h, v in spend.items() if h in hours) / recorded
         old, cheap, dear = bill(was), bill(off), bill(top)
         slots, cost = live[(provider, model)]
+        now = time.time()
+        turns = _next_change(prices, provider, model, now)
         found.append({
+            "next_change": turns and {
+                "at": turns[0], "in_seconds": turns[0] - now,
+                "tier": "peak" if datetime.fromtimestamp(turns[0], timezone.utc).hour in hours
+                        else "off-peak",
+                "rates": turns[1],
+            },
             "provider": provider, "model": model, "starts": start,
             "peak_hours_utc": _hour_ranges(hours),
             "peak_hours_local": _local_hours(hours, time.time()),
@@ -1083,6 +1108,12 @@ def cmd_ai_clock(args) -> int:
         if f["peak_hours_local_other_half_year"] != f["peak_hours_local"]:
             print(f"  The window is fixed in UTC, so daylight saving moves it here: "
                   f"{f['peak_hours_local_other_half_year']} for the other half of the year.")
+        turns = f["next_change"]
+        if turns:
+            r, when = turns["rates"], datetime.fromtimestamp(turns["at"], timezone.utc)
+            print(f"  next change {when:%Y-%m-%d %H:%MZ} — {when.astimezone():%H:%M %Z}, in "
+                  f"{timedelta(seconds=int(turns['in_seconds']))} — {turns['tier']} rate, "
+                  f"{r['input']:g}/{r['cache_read']:g}/{r['cache_write']:g}/{r['output']:g}")
         print()
         print(table([(r, f"{was[r]:g}", f"{off[r]:g}", f"{top[r]:g}",
                       f"{off[r] / was[r]:.2f}x" if was[r] else "-",
