@@ -994,6 +994,106 @@ def _clocked_rates(hu) -> None:
                            "provider", "stated in")))
 
 
+def _at_hour(after: float, hour: int) -> float:
+    """The first `hour` UTC comfortably after an instant."""
+    day = datetime.fromtimestamp(after, timezone.utc) + timedelta(days=1)
+    return day.replace(hour=hour, minute=0, second=0, microsecond=0).timestamp()
+
+
+def cmd_ai_clock(args) -> int:
+    """What a seller's peak window costs, at this machine's own working hours.
+
+    A headline rate change says nothing on its own. What decides the bill is
+    which role's rate moved and how much of your traffic is that role: nearly
+    every token an agent sends is a cache read, so a cache-read rate is the
+    whole invoice and the input rate is a rounding error.
+    """
+    hu, db = _ledger(args)
+    prices = hu.Prices()
+    span = args.hours * args.days
+
+    # Which hours you work decides the exposure, so it is measured, not assumed.
+    spend, live = {}, {}
+    for row in hu.totals(db, ("provider", "model", "utc_slot"), prices=prices):
+        hour = int(row["utc_slot"][-2:])
+        spend[hour] = spend.get(hour, 0.0) + row["cost"]
+        seen = live.setdefault((row["provider"], row["model"]), [0, 0.0])
+        seen[0] += 1
+        seen[1] += row["cost"]
+    recorded = sum(spend.values()) or 1.0
+
+    found = []
+    for row in sorted(hu.totals(db, ("provider", "model"), prices=prices), key=lambda r: -r["cost"]):
+        provider, model = row["provider"], row["model"]
+        moves = prices.clock(provider, model)
+        if not moves:
+            continue
+        hours, start = moves
+        was = prices.lookup(provider, model, start - 1)
+        off = prices.lookup(provider, model, _at_hour(start, next(h for h in range(24)
+                                                                 if h not in hours)))
+        top = prices.lookup(provider, model, _at_hour(start, hours[0]))
+        mix = {role: row[role] for role in hu.BILLED_ROLES}
+        bill = lambda r: sum(mix[k] * r[k] for k in hu.BILLED_ROLES) / 1e6
+        if not (was and off and top) or not bill(was):
+            continue
+        exposure = sum(v for h, v in spend.items() if h in hours) / recorded
+        old, cheap, dear = bill(was), bill(off), bill(top)
+        slots, cost = live[(provider, model)]
+        found.append({
+            "provider": provider, "model": model, "starts": start,
+            "peak_hours_utc": _hour_ranges(hours),
+            "peak_hours_local": _hour_ranges(tuple((h - time.timezone // 3600) % 24
+                                                  for h in hours)),
+            "rates": {"was": was, "off_peak": off, "peak": top},
+            "tokens": mix, "repriced": {"was": old, "off_peak": cheap, "peak": dear},
+            "peak_exposure": exposure,
+            "blend": exposure * (dear / old) + (1 - exposure) * (cheap / old),
+            "measured_hours": slots, "usd_per_hour": cost / max(slots, 1),
+        })
+
+    if args.json:
+        print(json.dumps({"session_hours": args.hours, "days": args.days,
+                          "models": found}, indent=2))
+        return 0
+    if not found:
+        print("  no model on this machine is sold on a clock.")
+        print("  share/prices.tsv documents the `at` clause that would say so.")
+        return 0
+
+    for f in found:
+        was, off, top = (f["rates"][k] for k in ("was", "off_peak", "peak"))
+        mix, priced = f["tokens"], f["repriced"]
+        print()
+        print(rule(f"{f['model']} on {f['provider']}"))
+        print(f"  peak {f['peak_hours_utc']} UTC — {f['peak_hours_local']} local — from "
+              f"{datetime.fromtimestamp(f['starts'], timezone.utc):%Y-%m-%d %H:%MZ}")
+        print()
+        print(table([(r, f"{was[r]:g}", f"{off[r]:g}", f"{top[r]:g}",
+                      f"{off[r] / was[r]:.2f}x" if was[r] else "-",
+                      f"{top[r] / was[r]:.2f}x" if was[r] else "-",
+                      toks(mix[r]), money(mix[r] * was[r] / 1e6),
+                      money(mix[r] * off[r] / 1e6), money(mix[r] * top[r] / 1e6))
+                     for r in hu.BILLED_ROLES],
+                    ("role", "$/M was", "off-peak", "peak", "off x", "peak x",
+                     "your tokens", "was", "at off-peak", "at peak")))
+        print(f"\n  Everything recorded for this model, repriced: {money(priced['was'])} becomes "
+              f"{money(priced['off_peak'])} off-peak and {money(priced['peak'])} at peak.")
+        print(f"  {pct(f['peak_exposure'])} of this machine's spend lands in those hours, "
+              f"so the blend is {f['blend']:.2f}x.")
+
+    print()
+    print(rule(f"{args.hours:g}h a day, {args.days} days"))
+    print(table([(f["model"], f"{f['measured_hours']}h", money(f["usd_per_hour"]),
+                  money(f["usd_per_hour"] * span), money(f["usd_per_hour"] * span * f["blend"]),
+                  f"{f['blend']:.2f}x") for f in found],
+                ("model", "measured over", "$/h now", f"{span:g}h now",
+                 f"{span:g}h after", "blend")))
+    print("\n  `$/h now` is this machine's own measured burn for that model, at the rate")
+    print("  in force when the tokens were sent. It is a rate, not a forecast.")
+    return 0
+
+
 def cmd_ai_doctor(args) -> int:
     """Where every number came from, and what is missing."""
     import harness_usage as hu
@@ -1375,6 +1475,11 @@ def main() -> int:
     a = ai.add_parser("models", help="spend per model, with the rates used")
     a.add_argument("--since", metavar="DUR")
     a.set_defaults(fn=cmd_ai_models)
+
+    a = ai.add_parser("clock", help="what a seller's peak window costs at your hours")
+    a.add_argument("--hours", type=float, default=8, help="session hours in a day")
+    a.add_argument("--days", type=int, default=30, help="days to project over")
+    a.set_defaults(fn=cmd_ai_clock)
 
     a = ai.add_parser("limits", help="subscription windows, where a harness publishes them")
     a.set_defaults(fn=cmd_ai_limits)

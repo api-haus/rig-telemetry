@@ -217,6 +217,19 @@ class Prices:
             return None
         return max(fit, key=lambda r: (r["rank"], r["from"] or 0.0, r["at"] is not None))
 
+    def clock(self, provider: str, model: str) -> tuple[tuple[int, ...], float] | None:
+        """The UTC hours this model is dearer in, and when the clock starts.
+
+        None when the price does not move on a clock, which is almost every
+        model: only a seller that publishes a peak window answers here.
+        """
+        moving = [r for r in self._rules(provider, model)
+                  if r["at"] and (r["on"] is None or r["on"] == provider)]
+        if not moving:
+            return None
+        return (tuple(sorted({h for r in moving for h in r["at"]})),
+                min(r["from"] or 0.0 for r in moving))
+
     def _rules(self, provider: str, model: str) -> list[dict]:
         key = (provider, model)
         if key not in self._cache:

@@ -174,6 +174,26 @@ reason — the day you lived answers "what did I spend yesterday", and the
 seller's hour is the grain a peak rate is billed at. `rig ai doctor` prints
 every rate that moves, and when.
 
+#### What the clock actually costs you
+
+```
+rig ai clock                       # at 8h a day, 30 days
+rig ai clock --hours 5 --days 21
+```
+
+A headline rate change says nothing on its own. What decides the bill is
+**which role's rate moved** against **how much of your traffic is that role**.
+DeepSeek's input rate went up 1.5x off-peak; its cache-read rate went up 6.1x,
+and on this machine 99.6% of the tokens sent to it are cache reads. The blended
+effect is therefore 4.5x off-peak and 9.0x at peak, not the 2x the peak/off-peak
+split suggests.
+
+Which hours you work then decides the mix, so `rig ai clock` measures that too
+rather than assuming a flat day: it takes the share of this machine's recorded
+spend that falls inside the peak window, from the ledger's own UTC hours. Peak
+06:00-10:00 UTC is 08:00-12:00 in EET, a quiet morning here, which is why the
+exposure comes out at 21% rather than the 29% a flat day would give.
+
 **Nothing is guessed.** A model that no tier reaches is counted in tokens and
 excluded from every dollar figure, and `rig ai doctor` prints the exact line
 that fixes it. Half a money figure is worse than none.

@@ -75,9 +75,15 @@ Say which one you mean; never call the list figure a bill.
 ```
 rig ai                    # everything, split by harness, role, model, project
 rig ai daily --since 30d  # per day, reaches back further than Prometheus does
+rig ai clock              # what a seller's peak window costs at your own hours
 rig ai doctor             # what is read, what is priced, what is missing
 rig ai doctor --verify    # recount the files, prove the ledger against them
 ```
+
+Never answer "how much will this price change cost me" by multiplying a
+headline rate. Nearly every token an agent sends is a cache read, so the
+cache-read rate is the whole bill. `rig ai clock` reprices this machine's own
+token mix and weights it by the hours it actually works.
 
 Answer "why is it expensive" from the role split, not the model. A running
 context is re-sent on every request, so `cache_read` is normally 70-80% of the
