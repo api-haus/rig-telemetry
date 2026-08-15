@@ -1,6 +1,6 @@
 ---
 name: rig-aicost
-description: Report what AI coding harnesses cost, in tokens and in API-list dollars, across Claude Code, Codex, Kimi Code, OpenCode, pi, Qwen Code, Gemini CLI, Goose, Crush, Copilot CLI and droid. Use when the user asks how much they spent on AI, what a session or project cost, where the tokens went, which model or subagent is expensive, whether context is being re-read, how much of a subscription window is used, or asks to compare harnesses, providers or plans. Also use before claiming any AI usage figure, and when the user mentions token burn, cache reads, cost per turn, or "is this worth it on the API".
+description: Report what AI coding harnesses cost, in tokens and in API-list dollars, across Claude Code, Codex, Kimi Code, OpenCode, pi, Qwen Code, dsh, Gemini CLI, Goose, Crush, Copilot CLI and droid. Use when the user asks how much they spent on AI, what a session or project cost, where the tokens went, which model or subagent is expensive, whether context is being re-read, how much of a subscription window is used, or asks to compare harnesses, providers or plans. Also use before claiming any AI usage figure, and when the user mentions token burn, cache reads, cost per turn, or "is this worth it on the API".
 ---
 
 # rig-aicost

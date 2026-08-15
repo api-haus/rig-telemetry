@@ -26,6 +26,11 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+try:  # dsh compresses its transcript; the decoder is stdlib from 3.14 on.
+    from compression.zstd import ZstdDecompressor, ZstdError
+except ImportError:
+    ZstdDecompressor = ZstdError = None
+
 HOME = pathlib.Path(os.environ.get("RIG_AI_HOME") or pathlib.Path.home())
 CACHE = pathlib.Path(os.environ.get("RIG_AI_CACHE") or
                      (pathlib.Path.home() / ".cache" / "rig-telemetry"))
@@ -427,6 +432,40 @@ class Source:
                 except (ValueError, UnicodeDecodeError):
                     continue
             yield None, pos
+
+    @staticmethod
+    def _frames(path: pathlib.Path, offset: int, needle: str):
+        """Yield (json, new_offset) for lines in the whole zstd frames past `offset`.
+
+        A harness that compresses as it appends writes one frame per append, so
+        the offset every other source keeps as a byte position is a frame
+        boundary here and resumes the same way. A trailing frame still being
+        written is left unread; the next pass starts at it.
+        """
+        if ZstdDecompressor is None:
+            raise ValueError("compressed transcript needs Python 3.14 for compression.zstd")
+        with path.open("rb") as fh:
+            fh.seek(offset)
+            buf = fh.read()
+        pos = offset
+        while buf:
+            decoder = ZstdDecompressor()
+            try:
+                block = decoder.decompress(buf)
+            except ZstdError as why:
+                raise ValueError(f"zstd frame at byte {pos}: {why}") from why
+            if not decoder.eof:
+                break
+            pos += len(buf) - len(decoder.unused_data)
+            buf = decoder.unused_data
+            for raw in block.splitlines():
+                if needle and needle.encode() not in raw:
+                    continue
+                try:
+                    yield json.loads(raw), pos
+                except (ValueError, UnicodeDecodeError):
+                    continue
+        yield None, pos
 
     @staticmethod
     def _iso(text: str | None) -> float:
@@ -981,6 +1020,60 @@ class Droid(Source):
             )
 
 
+class Dsh(Source):
+    """~/.dsh/sessions/<slug>/session-<id>/session.jsonl.zstd, DeepSeek's harness.
+
+    The transcript is compressed as it is appended, one zstd frame per write,
+    and every frame ends on a line. `inputTokens` already excludes
+    `cacheReadTokens`, so the counts arrive exclusive; DeepSeek bills a cache
+    miss at the plain input rate and has no cache-write role to report. The
+    same usage figures appear on the streaming chunk and on the assembled
+    message, and only the message is read.
+    """
+    name = "dsh"
+    home_hint = ".dsh"
+
+    def files(self):
+        root = HOME / ".dsh" / "sessions"
+        return sorted(root.glob("*/*/session.jsonl.zstd")) if root.is_dir() else []
+
+    def parse(self, path, offset, ctx):
+        if "cwd" not in ctx:
+            ctx.update(self._header(path))
+        for obj, pos in self._frames(path, offset, '"usage"'):
+            if obj is None:
+                return pos
+            if obj.get("type") != "assistant/message":
+                continue
+            data = obj.get("data") or {}
+            u = data.get("usage") or {}
+            source = (data.get("message") or {}).get("source") or {}
+            if not isinstance(u, dict) or source.get("kind") != "model":
+                continue
+            yield Rec(
+                ts=float(obj.get("time") or 0) / 1000 or time.time(),
+                harness=self.name,
+                model=source.get("model") or "",
+                project=self._project(ctx.get("cwd")),
+                kind="subagent" if ctx.get("depth") else "main",
+                provider=source.get("provider") or "",
+                input=int(u.get("inputTokens") or 0),
+                output=int(u.get("outputTokens") or 0),
+                cache_read=int(u.get("cacheReadTokens") or 0),
+                reasoning=int(u.get("reasoningTokens") or 0),
+            )
+
+    @staticmethod
+    def _header(path: pathlib.Path) -> dict:
+        """The working directory and delegation depth, from the first record."""
+        for obj, _ in Source._frames(path, 0, ""):
+            if obj is None or obj.get("type") != "session":
+                break
+            return {"cwd": obj.get("cwd") or "",
+                    "depth": int(obj.get("delegationDepth") or 0)}
+        return {"cwd": "", "depth": 0}
+
+
 def _walk_usage(obj, model=""):
     """Every `usage` dict in a nested structure, with the nearest model name."""
     if isinstance(obj, dict):
@@ -1014,7 +1107,7 @@ def _live_sessions(harness, paths, extract, max_age=900):
 
 
 SOURCES: list[type[Source]] = [
-    ClaudeCode, Codex, KimiCode, OpenCode, Pi, Qwen,
+    ClaudeCode, Codex, KimiCode, OpenCode, Pi, Qwen, Dsh,
     GeminiCli, Goose, Crush, CopilotCli, Droid,
 ]
 

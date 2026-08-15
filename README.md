@@ -94,8 +94,8 @@ and where it can lie. It needs 37 days of history before it says anything.
 
 **It knows what the AI cost.** A subscription hides the price of a request, so
 you cannot tell a two-cent turn from a three-dollar one. This reads the session
-files eleven coding harnesses already write — Claude Code, Codex, Kimi Code,
-OpenCode, pi, Qwen Code, Gemini CLI, Goose, Crush, Copilot CLI, droid — and
+files twelve coding harnesses already write — Claude Code, Codex, Kimi Code,
+OpenCode, pi, Qwen Code, dsh, Gemini CLI, Goose, Crush, Copilot CLI, droid — and
 prices the tokens at the rates the providers publish for the same models on
 their APIs.
 

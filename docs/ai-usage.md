@@ -68,6 +68,7 @@ installed into any harness and no configuration is changed.
 | OpenCode | `storage/message/**/*.json` and `opencode.db` | exclusive; reports its own cost |
 | pi | `~/.pi/agent/sessions/**/*.jsonl` | exclusive; reports its own cost |
 | Qwen Code | `~/.qwen/usage_record.jsonl` | Gemini: cached inside prompt, thoughts inside output |
+| dsh | `~/.dsh/sessions/**/session.jsonl.zstd` | exclusive; compressed, one zstd frame per append |
 | Gemini CLI | `~/.gemini/tmp/*/chats/*.json` | Gemini; only saved checkpoints carry usage |
 | Goose | `~/.local/share/goose/sessions/*.jsonl` | exclusive |
 | Crush | `~/.local/share/crush/crush.db` | exclusive |
@@ -91,6 +92,9 @@ Every reader converts to one **exclusive** form before anything else happens:
 
 Anthropic already reports this shape. OpenAI and Google nest the cached count
 inside the prompt count, so the reader subtracts it out.
+
+DeepSeek publishes no cache-write rate because it charges a cache miss at the
+plain input rate, so `dsh` records no such role and none is invented for it.
 
 ---
 
@@ -297,6 +301,13 @@ exits 1. Run it after touching a reader.
 Scanning is incremental by byte offset. Measured here: 2,157 files and 6.7 GB
 of transcripts in 14.4 seconds on the first pass, and under 0.1 seconds after
 that.
+
+A compressed transcript is read the same way. dsh writes one zstd frame per
+append, and each frame ends on a line, so a frame boundary is a byte offset
+like any other and a frame still being written is left for the next pass. That
+needs `compression.zstd`, which is standard library from Python 3.14 — hence
+the exporter image. An older interpreter reports the file as unreadable rather
+than as empty.
 
 Files that get rewritten rather than appended to — the small per-session
 summaries — are re-read whole and their previous contribution deleted first, so
