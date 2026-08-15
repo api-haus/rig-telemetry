@@ -191,8 +191,20 @@ split suggests.
 Which hours you work then decides the mix, so `rig ai clock` measures that too
 rather than assuming a flat day: it takes the share of this machine's recorded
 spend that falls inside the peak window, from the ledger's own UTC hours. Peak
-06:00-10:00 UTC is 08:00-12:00 in EET, a quiet morning here, which is why the
-exposure comes out at 21% rather than the 29% a flat day would give.
+06:00-10:00 UTC is a quiet morning here, which is why the exposure comes out at
+21% rather than the 29% a flat day would give.
+
+The window is fixed in UTC, so on a wall clock that keeps daylight saving it
+moves twice a year. `rig ai clock` renders it at the offset in force on the day
+it is run and names where it goes on the other side of the year, rather than
+storing one offset and being an hour wrong for six months.
+
+The "Rig — AI Spend" dashboard shades those hours behind every graph, as a
+Grafana annotation generated from the same `share/prices.tsv` lines. It is built
+from PromQL's `hour()` rather than from a recording rule, so it marks a week
+that has already been paid for — a rule would only know the hours since it was
+added — and it starts at the `from` instant, so nothing before the cutover is
+shaded.
 
 **Nothing is guessed.** A model that no tier reaches is counted in tokens and
 excluded from every dollar figure, and `rig ai doctor` prints the exact line

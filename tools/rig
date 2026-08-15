@@ -1000,6 +1000,18 @@ def _at_hour(after: float, hour: int) -> float:
     return day.replace(hour=hour, minute=0, second=0, microsecond=0).timestamp()
 
 
+def _local_hours(hours: tuple[int, ...], when: float) -> str:
+    """A fixed UTC window as the wall clock reads it, at that date's offset.
+
+    Taken from the offset in force at `when` rather than from a stored one:
+    where the clock changes twice a year, a window fixed in UTC is not fixed
+    on the wall, and a half-year-old offset renders it an hour wrong.
+    """
+    shift = datetime.fromtimestamp(when, timezone.utc).astimezone().utcoffset()
+    moved = round(shift.total_seconds() / 3600) if shift else 0
+    return _hour_ranges(tuple(sorted({(h + moved) % 24 for h in hours})))
+
+
 def cmd_ai_clock(args) -> int:
     """What a seller's peak window costs, at this machine's own working hours.
 
@@ -1043,8 +1055,8 @@ def cmd_ai_clock(args) -> int:
         found.append({
             "provider": provider, "model": model, "starts": start,
             "peak_hours_utc": _hour_ranges(hours),
-            "peak_hours_local": _hour_ranges(tuple((h - time.timezone // 3600) % 24
-                                                  for h in hours)),
+            "peak_hours_local": _local_hours(hours, time.time()),
+            "peak_hours_local_other_half_year": _local_hours(hours, time.time() + 182 * 86400),
             "rates": {"was": was, "off_peak": off, "peak": top},
             "tokens": mix, "repriced": {"was": old, "off_peak": cheap, "peak": dear},
             "peak_exposure": exposure,
@@ -1066,8 +1078,11 @@ def cmd_ai_clock(args) -> int:
         mix, priced = f["tokens"], f["repriced"]
         print()
         print(rule(f"{f['model']} on {f['provider']}"))
-        print(f"  peak {f['peak_hours_utc']} UTC — {f['peak_hours_local']} local — from "
-              f"{datetime.fromtimestamp(f['starts'], timezone.utc):%Y-%m-%d %H:%MZ}")
+        print(f"  peak {f['peak_hours_utc']} UTC — {f['peak_hours_local']} {time.strftime('%Z')}"
+              f" — from {datetime.fromtimestamp(f['starts'], timezone.utc):%Y-%m-%d %H:%MZ}")
+        if f["peak_hours_local_other_half_year"] != f["peak_hours_local"]:
+            print(f"  The window is fixed in UTC, so daylight saving moves it here: "
+                  f"{f['peak_hours_local_other_half_year']} for the other half of the year.")
         print()
         print(table([(r, f"{was[r]:g}", f"{off[r]:g}", f"{top[r]:g}",
                       f"{off[r] / was[r]:.2f}x" if was[r] else "-",

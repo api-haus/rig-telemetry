@@ -18,6 +18,9 @@ import json
 import pathlib
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import harness_usage as hu  # noqa: E402
+
 DS = {"type": "prometheus", "uid": "rig-prom"}
 OUT = pathlib.Path(__file__).resolve().parent.parent / "grafana" / "dashboards"
 
@@ -197,8 +200,61 @@ def filter_var(name, label, metric, *, within=()):
     }
 
 
+BUILT_IN_ANNOTATION = {
+    "builtIn": 1, "name": "Annotations & Alerts", "type": "dashboard",
+    "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+    "enable": True, "hide": True, "iconColor": "rgba(0, 211, 255, 1)",
+}
+
+
+def peak_windows() -> dict[str, tuple[tuple[int, ...], float]]:
+    """Each seller's dearer hours, read from the file the ledger prices with.
+
+    The clock is stated once, in share/prices.tsv. A marker drawn from a second
+    copy of it is a marker that will one day disagree with the bill.
+    """
+    out: dict[str, tuple[set, float]] = {}
+    for key, lines in hu.load_overrides().items():
+        for value, _, _ in lines:
+            try:
+                _, clause = hu.split_clauses(value)
+            except ValueError:
+                continue
+            if not clause["at"]:
+                continue
+            seller = clause["on"] or key.replace("_", "-")
+            begins = clause["from"] or 0.0
+            hours, start = out.get(seller, (set(), begins))
+            out[seller] = (hours | set(clause["at"]), min(start, begins))
+    return {k: (tuple(sorted(h)), s) for k, (h, s) in sorted(out.items())}
+
+
+def peak_annotation(seller, hours, start) -> dict:
+    """A band behind the graphs for every hour that seller charges peak in.
+
+    Built from hour(), not from a recording rule: a rule would only mark the
+    hours since it was added, and the interesting question is always about a
+    week that has already been paid for.
+    """
+    spans: list[list[int]] = []
+    for hour in hours:
+        if spans and hour == spans[-1][1]:
+            spans[-1][1] = hour + 1
+        else:
+            spans.append([hour, hour + 1])
+    inside = " or ".join(f"(hour() >= {a} and hour() < {b})" for a, b in spans)
+    expr = f"({inside}) and (vector(time()) >= {int(start)})"
+    return {
+        "name": f"{seller} peak hours", "datasource": DS, "enable": True, "hide": False,
+        "iconColor": "rgba(255, 152, 0, 0.35)", "expr": expr, "step": "300s",
+        "target": {"expr": expr, "refId": "peak", "legendFormat": ""},
+        "titleFormat": f"{seller} peak rate", "textFormat": "", "tagKeys": "",
+        "useValueForTime": "false",
+    }
+
+
 def dashboard(uid, title, description, L, *, refresh="15s", time_from="now-3h", tags=(),
-              variables=()):
+              variables=(), annotations=()):
     return {
         "uid": uid, "title": title, "description": description,
         "tags": ["rig", *tags], "timezone": "browser", "editable": True,
@@ -207,6 +263,7 @@ def dashboard(uid, title, description, L, *, refresh="15s", time_from="now-3h", 
         "graphTooltip": 1,
         "panels": L.panels,
         "templating": {"list": list(variables)},
+        "annotations": {"list": [BUILT_IN_ANNOTATION, *annotations]},
     }
 
 
@@ -592,6 +649,8 @@ def ai():
                      "list rates. Money, tokens, models, projects, and the delegated share. The "
                      "dropdowns narrow every panel to one harness, provider or model.",
                      L, time_from="now-7d", refresh="1m", tags=["ai", "cost"],
+                     annotations=[peak_annotation(seller, hours, start)
+                                  for seller, (hours, start) in peak_windows().items()],
                      variables=[
                          filter_var("harness", "Harness", "aiusage_cost_usd_total"),
                          filter_var("provider", "Provider", "aiusage_cost_usd_total",

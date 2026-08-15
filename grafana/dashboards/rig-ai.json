@@ -2173,5 +2173,42 @@
         "hide": 0
       }
     ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "name": "Annotations & Alerts",
+        "type": "dashboard",
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)"
+      },
+      {
+        "name": "deepseek peak hours",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "rig-prom"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "rgba(255, 152, 0, 0.35)",
+        "expr": "((hour() >= 1 and hour() < 4) or (hour() >= 6 and hour() < 10)) and (vector(time()) >= 1786896000)",
+        "step": "300s",
+        "target": {
+          "expr": "((hour() >= 1 and hour() < 4) or (hour() >= 6 and hour() < 10)) and (vector(time()) >= 1786896000)",
+          "refId": "peak",
+          "legendFormat": ""
+        },
+        "titleFormat": "deepseek peak rate",
+        "textFormat": "",
+        "tagKeys": "",
+        "useValueForTime": "false"
+      }
+    ]
   }
 }
