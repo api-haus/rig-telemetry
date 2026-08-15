@@ -79,7 +79,7 @@ def targets(queries):
 
 def ts(L, title, queries, *, unit="short", w=12, h=8, stack=False, fill=0,
        desc="", min_=None, max_=None, thresholds=None, legend_calcs=("last", "max"),
-       time_from=None, no_value=None):
+       time_from=None, no_value=None, min_interval=None):
     custom = {
         "drawStyle": "line", "lineWidth": 1, "fillOpacity": fill,
         "gradientMode": "opacity", "showPoints": "never",
@@ -110,6 +110,8 @@ def ts(L, title, queries, *, unit="short", w=12, h=8, stack=False, fill=0,
     }
     if time_from:
         panel["timeFrom"] = time_from
+    if min_interval:
+        panel["interval"] = min_interval
     return L.place(panel, w, h)
 
 
@@ -148,11 +150,20 @@ def table(L, title, queries, *, w=12, h=9, desc="", unit="short", sort_desc=True
     }, w, h)
 
 
-def bars(L, title, expr, legend, *, unit="short", w=8, h=9, desc="", decimals=None):
+def bars(L, title, expr, *, unit="short", w=8, h=9, desc="", decimals=None,
+         hide=("Time", "__name__", "instance", "job", "host")):
     """A ranked list. Reads better than a pie for "who spent the most"."""
+    # One frame per series comes back in label order, and a bar gauge draws
+    # frames in the order given — so ranking needs a table and a sort, not topk.
+    organize = {"excludeByName": {k: True for k in hide}, "renameByName": {}, "indexByName": {}}
     return L.place({
         "type": "bargauge", "title": title, "description": desc, "datasource": DS,
-        "targets": [dict(t, instant=True) for t in targets([(expr, legend)])],
+        "targets": [dict(t, format="table", instant=True, range=False)
+                    for t in targets([(expr, "")])],
+        "transformations": [
+            {"id": "organize", "options": organize},
+            {"id": "sortBy", "options": {"fields": {}, "sort": [{"field": "Value", "desc": True}]}},
+        ],
         "fieldConfig": {"defaults": {
             "unit": unit, "decimals": decimals,
             "color": {"mode": "continuous-BlPu"},
@@ -160,7 +171,7 @@ def bars(L, title, expr, legend, *, unit="short", w=8, h=9, desc="", decimals=No
         }, "overrides": []},
         "options": {"displayMode": "gradient", "orientation": "horizontal",
                     "showUnfilled": True, "valueMode": "color",
-                    "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False}},
+                    "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": True}},
     }, w, h)
 
 
@@ -425,6 +436,11 @@ LIST_PRICE = ("Every dollar here is API list value: what these tokens would cost
               "the provider's API. A subscription pays a flat fee instead, so this is the value "
               "received rather than money leaving the account.")
 
+# The harness job scrapes at 60s, but $__rate_interval is built from the
+# datasource's 15s default. Zoom in past ~6h and the window holds one sample,
+# increase() needs two, and the panel goes empty. Floor the step above a scrape.
+HARNESS_STEP = "5m"
+
 
 def ai():
     L = Layout()
@@ -450,31 +466,33 @@ def ai():
     L.row("Where the money goes")
     ts(L, "Spend by token role", [
         (f'sum by (role) (increase(aiusage_cost_usd_total[$__rate_interval]))', "{{role}}"),
-    ], unit="currencyUSD", stack=True, w=12,
+    ], unit="currencyUSD", stack=True, w=12, min_interval=HARNESS_STEP,
        desc=("cache_read is normally the largest by far: a running context is re-sent on every "
              "request, so cost is context size times request count. cache_write spikes when a "
              "prompt cache lapses and the whole window is paid for again."))
     ts(L, "Spend by harness", [
         ("sum by (harness) (increase(aiusage_cost_usd_total[$__rate_interval]))", "{{harness}}"),
-    ], unit="currencyUSD", stack=True, w=12)
-    bars(L, "Total by project", "topk(15, rig:ai:cost_usd:by_project)", "{{project}}",
+    ], unit="currencyUSD", stack=True, w=12, min_interval=HARNESS_STEP)
+    # by_project and by_model carry a harness label; leaving it in draws one bar
+    # per harness under the same name.
+    bars(L, "Total by project", "topk(15, sum by (project) (rig:ai:cost_usd:by_project))",
          unit="currencyUSD", w=8, decimals=0,
          desc="Cumulative list value per project directory, all recorded history.")
-    bars(L, "Total by model", "topk(12, rig:ai:cost_usd:by_model)", "{{model}}",
+    bars(L, "Total by model", "topk(12, sum by (model) (rig:ai:cost_usd:by_model))",
          unit="currencyUSD", w=8, decimals=0)
-    bars(L, "Total by role", "rig:ai:cost_usd:by_role", "{{role}}",
+    bars(L, "Total by role", "rig:ai:cost_usd:by_role",
          unit="currencyUSD", w=8, decimals=0)
 
     L.row("Who did the work")
     ts(L, "Delegated versus direct", [
         ("sum by (kind) (increase(aiusage_cost_usd_total[$__rate_interval]))", "{{kind}}"),
-    ], unit="currencyUSD", stack=True, w=12,
+    ], unit="currencyUSD", stack=True, w=12, min_interval=HARNESS_STEP,
        desc="Send enough work to subagents and most of the money stops being spent by the session "
             "you are watching.")
     ts(L, "Spend by project", [
         ("topk(8, sum by (project) (increase(aiusage_project_cost_usd_total[$__rate_interval])))",
          "{{project}}"),
-    ], unit="currencyUSD", stack=True, w=12)
+    ], unit="currencyUSD", stack=True, w=12, min_interval=HARNESS_STEP)
     table(L, "Model detail", [("rig:ai:cost_usd:by_model", "")], w=12, unit="currencyUSD",
           rename={"Value": "list value"},
           desc="Rates come from models.dev. `rig ai models` prints the per-million figures used.")

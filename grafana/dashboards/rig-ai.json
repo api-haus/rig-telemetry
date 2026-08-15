@@ -655,6 +655,7 @@
           "sort": "desc"
         }
       },
+      "interval": "5m",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -730,6 +731,7 @@
           "sort": "desc"
         }
       },
+      "interval": "5m",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -749,15 +751,44 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(15, rig:ai:cost_usd:by_project)",
-          "legendFormat": "{{project}}",
+          "expr": "topk(15, sum by (project) (rig:ai:cost_usd:by_project))",
+          "legendFormat": "",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"
           },
           "editorMode": "code",
-          "range": true,
+          "range": false,
+          "format": "table",
           "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "host": true
+            },
+            "renameByName": {},
+            "indexByName": {}
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
         }
       ],
       "fieldConfig": {
@@ -789,7 +820,7 @@
             "lastNotNull"
           ],
           "fields": "",
-          "values": false
+          "values": true
         }
       },
       "gridPos": {
@@ -811,15 +842,44 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(12, rig:ai:cost_usd:by_model)",
-          "legendFormat": "{{model}}",
+          "expr": "topk(12, sum by (model) (rig:ai:cost_usd:by_model))",
+          "legendFormat": "",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"
           },
           "editorMode": "code",
-          "range": true,
+          "range": false,
+          "format": "table",
           "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "host": true
+            },
+            "renameByName": {},
+            "indexByName": {}
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
         }
       ],
       "fieldConfig": {
@@ -851,7 +911,7 @@
             "lastNotNull"
           ],
           "fields": "",
-          "values": false
+          "values": true
         }
       },
       "gridPos": {
@@ -874,14 +934,43 @@
         {
           "refId": "A",
           "expr": "rig:ai:cost_usd:by_role",
-          "legendFormat": "{{role}}",
+          "legendFormat": "",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"
           },
           "editorMode": "code",
-          "range": true,
+          "range": false,
+          "format": "table",
           "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "host": true
+            },
+            "renameByName": {},
+            "indexByName": {}
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
         }
       ],
       "fieldConfig": {
@@ -913,7 +1002,7 @@
             "lastNotNull"
           ],
           "fields": "",
-          "values": false
+          "values": true
         }
       },
       "gridPos": {
@@ -1004,6 +1093,7 @@
           "sort": "desc"
         }
       },
+      "interval": "5m",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1079,6 +1169,7 @@
           "sort": "desc"
         }
       },
+      "interval": "5m",
       "gridPos": {
         "h": 8,
         "w": 12,
