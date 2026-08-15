@@ -1,7 +1,7 @@
 {
   "uid": "rig-ai",
   "title": "Rig \u2014 AI Spend",
-  "description": "What every AI coding harness on this machine used, priced at published API list rates. Money, tokens, models, projects, and the delegated share.",
+  "description": "What every AI coding harness on this machine used, priced at published API list rates. Money, tokens, models, projects, and the delegated share. The dropdowns narrow every panel to one harness, provider or model.",
   "tags": [
     "rig",
     "ai",
@@ -42,7 +42,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:cost_usd",
+          "expr": "sum(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"})",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -106,7 +106,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:cost_usd:today",
+          "expr": "sum(increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[24h]))",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -182,7 +182,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:cost_usd:week",
+          "expr": "sum(increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[7d]))",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -246,7 +246,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:burn_usd_per_hour",
+          "expr": "sum(rate(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[1h])) * 3600",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -322,7 +322,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:usd_per_million_tokens",
+          "expr": "sum(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}) / clamp_min(sum(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\",role!=\"reasoning\"}) / 1e6, 1e-9)",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -378,7 +378,7 @@
     {
       "type": "stat",
       "title": "Context re-read",
-      "description": "Share of input-side tokens that are cache reads \u2014 the window being re-sent.",
+      "description": "Share of input-side tokens that are cache reads \u2014 the window being re-sent. A cache read is billed at about a tenth of a fresh input token, so high is cheap: the red end is a session paying full price to say the same thing again.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -386,7 +386,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:cache_read_share",
+          "expr": "sum(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\",role=\"cache_read\"}) / clamp_min(sum(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\",role=~\"input|cache_read|cache_write\"}), 1)",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -404,16 +404,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 0.9
+                "color": "orange",
+                "value": 0.5
               },
               {
-                "color": "orange",
-                "value": 0.97
+                "color": "yellow",
+                "value": 0.75
+              },
+              {
+                "color": "green",
+                "value": 0.9
               }
             ]
           },
@@ -458,7 +462,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rig:ai:sessions_live)",
+          "expr": "sum(aiusage_sessions_live{harness=~\"$harness\"})",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -522,7 +526,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:harnesses_reporting",
+          "expr": "count(aiusage_source_files{harness=~\"$harness\"} > 0)",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -599,7 +603,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (role) (increase(aiusage_cost_usd_total[$__rate_interval]))",
+          "expr": "sum by (role) (increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[$__rate_interval]))",
           "legendFormat": "{{role}}",
           "datasource": {
             "type": "prometheus",
@@ -675,7 +679,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (harness) (increase(aiusage_cost_usd_total[$__rate_interval]))",
+          "expr": "sum by (harness) (increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[$__rate_interval]))",
           "legendFormat": "{{harness}}",
           "datasource": {
             "type": "prometheus",
@@ -751,7 +755,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(15, sum by (project) (rig:ai:cost_usd:by_project))",
+          "expr": "topk(15, sum by (project) (aiusage_project_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}))",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -842,7 +846,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(12, sum by (model) (rig:ai:cost_usd:by_model))",
+          "expr": "topk(12, sum by (model) (aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}))",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -933,7 +937,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:cost_usd:by_role",
+          "expr": "sum by (role) (aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"})",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -1037,7 +1041,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (kind) (increase(aiusage_cost_usd_total[$__rate_interval]))",
+          "expr": "sum by (kind) (increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[$__rate_interval]))",
           "legendFormat": "{{kind}}",
           "datasource": {
             "type": "prometheus",
@@ -1113,7 +1117,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(8, sum by (project) (increase(aiusage_project_cost_usd_total[$__rate_interval])))",
+          "expr": "topk(8, sum by (project) (increase(aiusage_project_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[$__rate_interval])))",
           "legendFormat": "{{project}}",
           "datasource": {
             "type": "prometheus",
@@ -1189,7 +1193,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:cost_usd:by_model",
+          "expr": "sum by (harness, provider, model) (aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"})",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -1262,7 +1266,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "aiusage_source_files",
+          "expr": "aiusage_source_files{harness=~\"$harness\"}",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -1348,7 +1352,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:tokens_per_sec",
+          "expr": "sum by (harness, role) (rate(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[15m]))",
           "legendFormat": "{{harness}} {{role}}",
           "datasource": {
             "type": "prometheus",
@@ -1423,7 +1427,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:requests_per_hour",
+          "expr": "sum by (harness) (rate(aiusage_requests_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[1h])) * 3600",
           "legendFormat": "{{harness}}",
           "datasource": {
             "type": "prometheus",
@@ -1498,7 +1502,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:cache_read_share",
+          "expr": "sum(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\",role=\"cache_read\"}) / clamp_min(sum(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\",role=~\"input|cache_read|cache_write\"}), 1)",
           "legendFormat": "cache reads / input-side tokens",
           "datasource": {
             "type": "prometheus",
@@ -1569,7 +1573,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:usd_per_million_tokens",
+          "expr": "sum(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}) / clamp_min(sum(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\",role!=\"reasoning\"}) / 1e6, 1e-9)",
           "legendFormat": "blended",
           "datasource": {
             "type": "prometheus",
@@ -1653,7 +1657,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:limit_used_ratio",
+          "expr": "aiusage_rate_limit_used_ratio{harness=~\"$harness\"}",
           "legendFormat": "{{harness}} {{window}} ({{plan}})",
           "datasource": {
             "type": "prometheus",
@@ -1725,7 +1729,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:reported_cost_usd",
+          "expr": "sum(aiusage_reported_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"})",
           "legendFormat": "harness reported",
           "datasource": {
             "type": "prometheus",
@@ -1736,7 +1740,7 @@
         },
         {
           "refId": "B",
-          "expr": "sum(aiusage_cost_usd_total)",
+          "expr": "sum(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"})",
           "legendFormat": "API list value",
           "datasource": {
             "type": "prometheus",
@@ -1807,7 +1811,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:unpriced_tokens",
+          "expr": "sum(aiusage_unpriced_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"})",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -2019,7 +2023,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(aiusage_source_files)",
+          "expr": "sum(aiusage_source_files{harness=~\"$harness\"})",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -2074,6 +2078,100 @@
     }
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "harness",
+        "label": "Harness",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "rig-prom"
+        },
+        "definition": "label_values(aiusage_cost_usd_total{},harness)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(aiusage_cost_usd_total{},harness)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "options": [],
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "hide": 0
+      },
+      {
+        "name": "provider",
+        "label": "Provider",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "rig-prom"
+        },
+        "definition": "label_values(aiusage_cost_usd_total{harness=~\"$harness\"},provider)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(aiusage_cost_usd_total{harness=~\"$harness\"},provider)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "options": [],
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "hide": 0
+      },
+      {
+        "name": "model",
+        "label": "Model",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "rig-prom"
+        },
+        "definition": "label_values(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\"},model)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\"},model)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "options": [],
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "hide": 0
+      }
+    ]
   }
 }

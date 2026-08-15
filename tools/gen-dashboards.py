@@ -23,8 +23,10 @@ OUT = pathlib.Path(__file__).resolve().parent.parent / "grafana" / "dashboards"
 
 # Colour steps shared by every saturation gauge, so "red" means the same thing
 # on every dashboard.
-def steps(*pairs):
-    out = [{"color": "green", "value": None}]
+def steps(*pairs, base="green"):
+    # `base="red"` for a figure whose healthy end is the high one — headroom,
+    # pump speed, cache hit share — so the pairs climb towards green instead.
+    out = [{"color": base, "value": None}]
     for colour, value in pairs:
         out.append({"color": colour, "value": value})
     return {"mode": "absolute", "steps": out}
@@ -175,7 +177,28 @@ def bars(L, title, expr, *, unit="short", w=8, h=9, desc="", decimals=None,
     }, w, h)
 
 
-def dashboard(uid, title, description, L, *, refresh="15s", time_from="now-3h", tags=()):
+def filter_var(name, label, metric, *, within=()):
+    """A dropdown that narrows every panel to one label's values.
+
+    Multi-select with an `All` that is the regex `.*`, so a panel writes
+    `label=~"$name"` once and it holds whether one value, several, or all are
+    picked. `within` chains a variable to the ones above it, so choosing a
+    provider shortens the model list rather than offering models it never sold.
+    """
+    scope = ",".join(f'{k}=~"${k}"' for k in within)
+    query = f"label_values({metric}{{{scope}}},{name})"
+    return {
+        "name": name, "label": label, "type": "query", "datasource": DS,
+        "definition": query, "query": {"qryType": 1, "query": query,
+                                       "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+        "current": {"text": ["All"], "value": ["$__all"]},
+        "includeAll": True, "allValue": ".*", "multi": True,
+        "options": [], "refresh": 1, "regex": "", "sort": 1, "hide": 0,
+    }
+
+
+def dashboard(uid, title, description, L, *, refresh="15s", time_from="now-3h", tags=(),
+              variables=()):
     return {
         "uid": uid, "title": title, "description": description,
         "tags": ["rig", *tags], "timezone": "browser", "editable": True,
@@ -183,7 +206,7 @@ def dashboard(uid, title, description, L, *, refresh="15s", time_from="now-3h", 
         "time": {"from": time_from, "to": "now"},
         "graphTooltip": 1,
         "panels": L.panels,
-        "templating": {"list": []},
+        "templating": {"list": list(variables)},
     }
 
 
@@ -316,13 +339,9 @@ def thermals():
          thresholds=steps(("yellow", 40), ("orange", 45)))
     stat(L, "GPU throttle headroom", "rig:thermal:gpu_headroom_c", unit="celsius",
          desc="Degrees remaining before the card throttles itself. Small is bad.",
-         thresholds={"mode": "absolute", "steps": [
-             {"color": "red", "value": None}, {"color": "orange", "value": 5},
-             {"color": "yellow", "value": 10}, {"color": "green", "value": 15}]})
+         thresholds=steps(("orange", 5), ("yellow", 10), ("green", 15), base="red"))
     stat(L, "Pump / loop fan", "rig:thermal:pump_rpm", unit="rotrpm",
-         thresholds={"mode": "absolute", "steps": [
-             {"color": "red", "value": None}, {"color": "orange", "value": 300},
-             {"color": "green", "value": 400}]})
+         thresholds=steps(("orange", 300), ("green", 400), base="red"))
     stat(L, "GPU power", "rig:gpu_watts", unit="watt")
     stat(L, "GPU fan", "rig:thermal:gpu_fan_ratio", unit="percentunit")
     stat(L, "Loop delta", "rig:thermal:coolant_delta_c", unit="celsius", decimals=1,
@@ -441,92 +460,121 @@ LIST_PRICE = ("Every dollar here is API list value: what these tokens would cost
 # increase() needs two, and the panel goes empty. Floor the step above a scrape.
 HARNESS_STEP = "5m"
 
+# What the dropdowns at the top of the board narrow every panel to.
+PICK = 'harness=~"$harness",provider=~"$provider",model=~"$model"'
+PICK_HARNESS = 'harness=~"$harness"'
+
+
+def picked(metric, *extra, pick=PICK):
+    """`metric{...}` with the dropdowns folded in.
+
+    A rig:ai: recording rule has already summed provider and model away, so a
+    panel that must answer "deepseek only" reads the counter itself.
+    """
+    return f'{metric}{{{",".join((pick, *extra))}}}'
+
 
 def ai():
     L = Layout()
+    money = picked("aiusage_cost_usd_total")
+    reads = picked("aiusage_tokens_total", 'role="cache_read"')
+    sent = picked("aiusage_tokens_total", 'role=~"input|cache_read|cache_write"')
+    billable = picked("aiusage_tokens_total", 'role!="reasoning"')
+    cache_share = f"sum({reads}) / clamp_min(sum({sent}), 1)"
+    per_million = f"sum({money}) / clamp_min(sum({billable}) / 1e6, 1e-9)"
     L.row("API list value")
-    stat(L, "All recorded", "rig:ai:cost_usd", unit="currencyUSD", w=4, decimals=0,
+    stat(L, "All recorded", f"sum({money})", unit="currencyUSD", w=4, decimals=0,
          desc=LIST_PRICE + " Counts every session file still on disk.")
-    stat(L, "Last 24h", "rig:ai:cost_usd:today", unit="currencyUSD", w=3, decimals=0,
+    stat(L, "Last 24h", f"sum(increase({money}[24h]))", unit="currencyUSD", w=3, decimals=0,
          thresholds=steps(("yellow", 50), ("orange", 200), ("red", 500)))
-    stat(L, "Last 7 days", "rig:ai:cost_usd:week", unit="currencyUSD", w=3, decimals=0)
-    stat(L, "Burn rate", "rig:ai:burn_usd_per_hour", unit="currencyUSD", w=3, decimals=1,
+    stat(L, "Last 7 days", f"sum(increase({money}[7d]))", unit="currencyUSD", w=3, decimals=0)
+    stat(L, "Burn rate", f"sum(rate({money}[1h])) * 3600", unit="currencyUSD", w=3, decimals=1,
          desc="Dollars of list value per hour, averaged over the last hour.",
          thresholds=steps(("yellow", 10), ("orange", 40), ("red", 100)))
-    stat(L, "Per million tokens", "rig:ai:usd_per_million_tokens", unit="currencyUSD", w=3,
+    stat(L, "Per million tokens", per_million, unit="currencyUSD", w=3,
          decimals=2, desc="Blended over every role. Rises when caches lapse and windows get rewritten.")
-    stat(L, "Context re-read", "rig:ai:cache_read_share", unit="percentunit", w=3,
-         desc="Share of input-side tokens that are cache reads — the window being re-sent.",
-         thresholds=steps(("yellow", 0.9), ("orange", 0.97)))
-    stat(L, "Live sessions", "sum(rig:ai:sessions_live)", unit="none", w=2,
+    stat(L, "Context re-read", cache_share, unit="percentunit", w=3,
+         desc="Share of input-side tokens that are cache reads — the window being re-sent. "
+              "A cache read is billed at about a tenth of a fresh input token, so high is cheap: "
+              "the red end is a session paying full price to say the same thing again.",
+         thresholds=steps(("orange", 0.5), ("yellow", 0.75), ("green", 0.9), base="red"))
+    stat(L, "Live sessions", f'sum(aiusage_sessions_live{{{PICK_HARNESS}}})', unit="none", w=2,
          desc="Harness sessions whose state file moved in the last few minutes.")
-    stat(L, "Harnesses seen", "rig:ai:harnesses_reporting", unit="none", w=3, graph=False,
+    stat(L, "Harnesses seen", f'count(aiusage_source_files{{{PICK_HARNESS}}} > 0)',
+         unit="none", w=3, graph=False,
          desc="Harnesses with session files on this machine. `rig ai doctor` lists all of them.")
 
     L.row("Where the money goes")
     ts(L, "Spend by token role", [
-        (f'sum by (role) (increase(aiusage_cost_usd_total[$__rate_interval]))', "{{role}}"),
+        (f"sum by (role) (increase({money}[$__rate_interval]))", "{{role}}"),
     ], unit="currencyUSD", stack=True, w=12, min_interval=HARNESS_STEP,
        desc=("cache_read is normally the largest by far: a running context is re-sent on every "
              "request, so cost is context size times request count. cache_write spikes when a "
              "prompt cache lapses and the whole window is paid for again."))
     ts(L, "Spend by harness", [
-        ("sum by (harness) (increase(aiusage_cost_usd_total[$__rate_interval]))", "{{harness}}"),
+        (f"sum by (harness) (increase({money}[$__rate_interval]))", "{{harness}}"),
     ], unit="currencyUSD", stack=True, w=12, min_interval=HARNESS_STEP)
-    # by_project and by_model carry a harness label; leaving it in draws one bar
-    # per harness under the same name.
-    bars(L, "Total by project", "topk(15, sum by (project) (rig:ai:cost_usd:by_project))",
+    # The counters carry a harness label too; leaving it in the `by` draws one
+    # bar per harness under the same name.
+    bars(L, "Total by project",
+         f'topk(15, sum by (project) ({picked("aiusage_project_cost_usd_total")}))',
          unit="currencyUSD", w=8, decimals=0,
          desc="Cumulative list value per project directory, all recorded history.")
-    bars(L, "Total by model", "topk(12, sum by (model) (rig:ai:cost_usd:by_model))",
+    bars(L, "Total by model", f"topk(12, sum by (model) ({money}))",
          unit="currencyUSD", w=8, decimals=0)
-    bars(L, "Total by role", "rig:ai:cost_usd:by_role",
+    bars(L, "Total by role", f"sum by (role) ({money})",
          unit="currencyUSD", w=8, decimals=0)
 
     L.row("Who did the work")
     ts(L, "Delegated versus direct", [
-        ("sum by (kind) (increase(aiusage_cost_usd_total[$__rate_interval]))", "{{kind}}"),
+        (f"sum by (kind) (increase({money}[$__rate_interval]))", "{{kind}}"),
     ], unit="currencyUSD", stack=True, w=12, min_interval=HARNESS_STEP,
        desc="Send enough work to subagents and most of the money stops being spent by the session "
             "you are watching.")
     ts(L, "Spend by project", [
-        ("topk(8, sum by (project) (increase(aiusage_project_cost_usd_total[$__rate_interval])))",
+        (f'topk(8, sum by (project) '
+         f'(increase({picked("aiusage_project_cost_usd_total")}[$__rate_interval])))',
          "{{project}}"),
     ], unit="currencyUSD", stack=True, w=12, min_interval=HARNESS_STEP)
-    table(L, "Model detail", [("rig:ai:cost_usd:by_model", "")], w=12, unit="currencyUSD",
-          rename={"Value": "list value"},
+    table(L, "Model detail", [(f"sum by (harness, provider, model) ({money})", "")],
+          w=12, unit="currencyUSD", rename={"Value": "list value"},
           desc="Rates come from models.dev. `rig ai models` prints the per-million figures used.")
-    table(L, "Harnesses on this machine", [("aiusage_source_files", "")], w=12, unit="none",
-          rename={"Value": "session files"},
+    table(L, "Harnesses on this machine", [(f'aiusage_source_files{{{PICK_HARNESS}}}', "")],
+          w=12, unit="none", rename={"Value": "session files"},
           desc="Zero files means the harness is installed but has written nothing this reader "
                "understands. `rig ai doctor` says which.")
 
     L.row("Tokens")
-    ts(L, "Tokens per second by role", [("rig:ai:tokens_per_sec", "{{harness}} {{role}}")],
-       unit="none", stack=True, w=12,
+    ts(L, "Tokens per second by role", [
+        (f'sum by (harness, role) (rate({picked("aiusage_tokens_total")}[15m]))',
+         "{{harness}} {{role}}"),
+    ], unit="none", stack=True, w=12,
        desc="reasoning is already inside output and is never priced twice.")
-    ts(L, "API responses per hour", [("rig:ai:requests_per_hour", "{{harness}}")],
-       unit="none", stack=True, w=12)
-    ts(L, "Context re-read share", [("rig:ai:cache_read_share", "cache reads / input-side tokens")],
+    ts(L, "API responses per hour", [
+        (f'sum by (harness) (rate({picked("aiusage_requests_total")}[1h])) * 3600', "{{harness}}"),
+    ], unit="none", stack=True, w=12)
+    ts(L, "Context re-read share", [(cache_share, "cache reads / input-side tokens")],
        unit="percentunit", max_=1, w=12,
        desc="Climbs through a long session. The window grows and every request pays for all of it.")
-    ts(L, "Dollars per million tokens", [("rig:ai:usd_per_million_tokens", "blended")],
+    ts(L, "Dollars per million tokens", [(per_million, "blended")],
        unit="currencyUSD", w=12,
        desc="A step up means either a dearer model or a cache rebuild.")
 
     L.row("Subscription and coverage")
-    ts(L, "Subscription window used", [("rig:ai:limit_used_ratio", "{{harness}} {{window}} ({{plan}})")],
-       unit="percentunit", max_=1, w=12,
+    ts(L, "Subscription window used", [
+        (f'aiusage_rate_limit_used_ratio{{{PICK_HARNESS}}}', "{{harness}} {{window}} ({{plan}})"),
+    ], unit="percentunit", max_=1, w=12,
        no_value="No harness here publishes its subscription window. Codex is the one that does.",
        desc="Read straight from the harness. It is the only figure on this dashboard that is about "
             "the plan rather than about list price.")
     ts(L, "List price against what the harness claims", [
-        ("rig:ai:reported_cost_usd", "harness reported"),
-        ("sum(aiusage_cost_usd_total)", "API list value"),
+        (f'sum({picked("aiusage_reported_cost_usd_total")})', "harness reported"),
+        (f"sum({money})", "API list value"),
     ], unit="currencyUSD", w=12,
        desc="Only some harnesses report a cost at all, so the reported line covers part of the "
             "total. Where both exist the gap is the subsidy.")
-    stat(L, "Tokens with no published price", "rig:ai:unpriced_tokens", unit="none", w=6,
+    stat(L, "Tokens with no published price",
+         f'sum({picked("aiusage_unpriced_tokens_total")})', unit="none", w=6,
          desc="Excluded from every dollar figure here. A model nobody sells by the token gets no "
               "invented number.",
          thresholds=steps(("yellow", 1)))
@@ -536,12 +584,21 @@ def ai():
     stat(L, "Price catalogue age", "aiusage_prices_age_seconds", unit="s", w=6,
          desc="models.dev is refetched by the exporter on its own schedule.",
          thresholds=steps(("yellow", 7 * 86400), ("orange", 30 * 86400)))
-    stat(L, "Files tracked", "sum(aiusage_source_files)", unit="none", w=6, graph=False)
+    stat(L, "Files tracked", f'sum(aiusage_source_files{{{PICK_HARNESS}}})',
+         unit="none", w=6, graph=False)
 
     return dashboard("rig-ai", "Rig — AI Spend",
                      "What every AI coding harness on this machine used, priced at published API "
-                     "list rates. Money, tokens, models, projects, and the delegated share.",
-                     L, time_from="now-7d", refresh="1m", tags=["ai", "cost"])
+                     "list rates. Money, tokens, models, projects, and the delegated share. The "
+                     "dropdowns narrow every panel to one harness, provider or model.",
+                     L, time_from="now-7d", refresh="1m", tags=["ai", "cost"],
+                     variables=[
+                         filter_var("harness", "Harness", "aiusage_cost_usd_total"),
+                         filter_var("provider", "Provider", "aiusage_cost_usd_total",
+                                    within=("harness",)),
+                         filter_var("model", "Model", "aiusage_cost_usd_total",
+                                    within=("harness", "provider")),
+                     ])
 
 
 # --------------------------------------------------------------------------

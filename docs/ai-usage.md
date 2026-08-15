@@ -220,7 +220,7 @@ whole machine's hardware telemetry.
 | `aiusage_cost_usd_total` | `harness`, `provider`, `model`, `kind`, `role` | API list value |
 | `aiusage_requests_total` | `harness`, `provider`, `model`, `kind` | API responses |
 | `aiusage_reported_cost_usd_total` | `harness`, `provider`, `model`, `kind` | What the harness itself claims |
-| `aiusage_project_cost_usd_total` | `harness`, `project` | List value per project |
+| `aiusage_project_cost_usd_total` | `harness`, `project`, `provider`, `model` | List value per project |
 | `aiusage_unpriced_tokens_total` | `harness`, `provider`, `model` | Tokens with no published rate |
 | `aiusage_sessions_live` | `harness`, `project`, `status` | Sessions whose state file moved recently |
 | `aiusage_rate_limit_used_ratio` | `harness`, `window`, `plan` | Subscription window consumed |
@@ -229,6 +229,29 @@ whole machine's hardware telemetry.
 `kind` is `main` or `subagent`. Delegate enough work and most of the spend
 stops being the session you are watching: on this machine 37% of all list value
 was spent by subagents.
+
+The project series carry `provider` and `model` too, so one dashboard filter
+narrows the project panels the same way it narrows the rest. The 80-project cut
+is applied twice over, and both halves matter:
+
+- **On the whole project, not on each of its models.** A project that used five
+  models would otherwise compete with itself for five of the kept slots.
+- **Inside each provider separately.** Ranked globally, a provider you have
+  spent a dollar with keeps no named project at all — it disappears into
+  `other` beneath a year of the largest one, and isolating it on the dashboard
+  then answers nothing. Per provider, every seller keeps its own top projects.
+
+On this ledger that is 190 series where the bare `harness`/`project` key was 87.
+Ranked globally it would be 160, and every provider below Anthropic, Moonshot,
+OpenAI and Alibaba would have no named project at all.
+
+The "Rig — AI Spend" dashboard puts `Harness`, `Provider` and `Model` dropdowns
+above every panel, chained left to right: pick a provider and the model list
+shortens to what that provider sold. Selecting `deepseek` isolates DeepSeek
+direct; the same model bought through OpenRouter stays under `openrouter`,
+because the provider is the seller, not the model's author. Every panel reads
+the raw counter rather than a `rig:ai:*` rule, since a rule has already summed
+those labels away.
 
 The `rig:ai:*` recording rules in `prometheus/rules/50-ai.yml` are the stable
 vocabulary. `rig:ai:cost_usd` is the running total, `rig:ai:burn_usd_per_hour`

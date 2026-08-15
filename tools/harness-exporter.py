@@ -96,24 +96,37 @@ def render(db, scan: hu.Scan, prices: hu.Prices) -> str:
          "What the harness itself said the same work cost, where it says anything.", reported)
 
     limit = TOP_PROJECTS
-    by_project = hu.totals(db, ("harness", "project"), prices=prices)
-    ranked = sorted(by_project, key=lambda r: -r["cost"])
-    keep = {(r["harness"], r["project"]) for r in ranked[:limit]}
-    folded: dict[tuple[str, str], list[float]] = {}
+    project_key = ("harness", "project", "provider", "model")
+    by_project = hu.totals(db, project_key, prices=prices)
+    # Ranked per provider and per whole project, not per model — see docs/ai-usage.md.
+    spend: dict[tuple[str, str, str], float] = {}
     for row in by_project:
-        key = (row["harness"], row["project"]) if (row["harness"], row["project"]) in keep \
-            else (row["harness"], "other")
+        rank = (row["harness"], row["project"], row["provider"])
+        spend[rank] = spend.get(rank, 0.0) + row["cost"]
+    seller: dict[str, list] = {}
+    for rank, cost in spend.items():
+        seller.setdefault(rank[2], []).append((rank, cost))
+    keep = {r for rows in seller.values()
+            for r, _ in sorted(rows, key=lambda kv: -kv[1])[:limit]}
+    folded: dict[tuple[str, ...], list[float]] = {}
+    for row in by_project:
+        rank = (row["harness"], row["project"], row["provider"])
+        name = row["project"] if rank in keep else "other"
+        key = (row["harness"], name, row["provider"], row["model"])
         acc = folded.setdefault(key, [0.0, 0.0, 0.0])
         acc[0] += row["cost"]
         acc[1] += sum(row[r] for r in ("input", "output", "cache_read", "cache_write"))
         acc[2] += row["requests"]
+    project_samples = [(dict(zip(project_key, (h, p, pr, m))), v)
+                       for (h, p, pr, m), v in folded.items()]
     emit("aiusage_project_cost_usd_total", "counter",
-         f"API list value per project. Beyond the {limit} dearest, projects fold into `other`.",
-         [({"harness": h, "project": p}, v[0]) for (h, p), v in folded.items()])
+         f"API list value per project. Beyond the {limit} dearest for each provider, "
+         "projects fold into `other`.",
+         [(tags, v[0]) for tags, v in project_samples])
     emit("aiusage_project_tokens_total", "counter", "Tokens per project, every role summed.",
-         [({"harness": h, "project": p}, v[1]) for (h, p), v in folded.items()])
+         [(tags, v[1]) for tags, v in project_samples])
     emit("aiusage_project_requests_total", "counter", "API responses per project.",
-         [({"harness": h, "project": p}, v[2]) for (h, p), v in folded.items()])
+         [(tags, v[2]) for tags, v in project_samples])
 
     for row in hu.unpriced(db, prices):
         unpriced.append(({"harness": row["harness"], "provider": row["provider"],
