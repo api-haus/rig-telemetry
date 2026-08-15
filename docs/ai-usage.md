@@ -199,12 +199,25 @@ moves twice a year. `rig ai clock` renders it at the offset in force on the day
 it is run and names where it goes on the other side of the year, rather than
 storing one offset and being an hour wrong for six months.
 
-The "Rig — AI Spend" dashboard shades those hours behind every graph, as a
-Grafana annotation generated from the same `share/prices.tsv` lines. It is built
-from PromQL's `hour()` rather than from a recording rule, so it marks a week
-that has already been paid for — a rule would only know the hours since it was
-added — and it starts at the `from` instant, so nothing before the cutover is
-shaded.
+The "Rig — AI Spend" dashboard carries two annotations for this, generated from
+the same `share/prices.tsv` lines and toggleable at the top of the board:
+
+| Annotation | |
+| --- | --- |
+| `<seller> peak hours` | a band over every hour billed at the peak rate |
+| `<seller> rate change` | a vertical line at each flip, four a day here |
+
+Both are built from PromQL's `hour()` rather than from a recording rule, so
+they mark a week that has already been paid for — a rule would only know the
+hours since it was added — and both start at the `from` instant, so nothing
+before the cutover is marked.
+
+Grafana draws consecutive annotation samples as a region and an isolated one as
+a line, so the two differ only in how sparse the query is. The line query runs
+at a 900s step and keeps the sample inside the first quarter of the hour: that
+returns exactly one sample per flip however Grafana aligns the range, places it
+within 15 minutes of the hour in the worst case, and still reaches back 114
+days before hitting Prometheus's 11,000-point ceiling.
 
 **Nothing is guessed.** A model that no tier reaches is counted in tokens and
 excluded from every dollar figure, and `rig ai doctor` prints the exact line

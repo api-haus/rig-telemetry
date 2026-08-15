@@ -229,28 +229,47 @@ def peak_windows() -> dict[str, tuple[tuple[int, ...], float]]:
     return {k: (tuple(sorted(h)), s) for k, (h, s) in sorted(out.items())}
 
 
-def peak_annotation(seller, hours, start) -> dict:
-    """A band behind the graphs for every hour that seller charges peak in.
-
-    Built from hour(), not from a recording rule: a rule would only mark the
-    hours since it was added, and the interesting question is always about a
-    week that has already been paid for.
-    """
+def hour_spans(hours) -> list[list[int]]:
+    """Contiguous hours collapsed to half-open [start, end) spans."""
     spans: list[list[int]] = []
     for hour in hours:
         if spans and hour == spans[-1][1]:
             spans[-1][1] = hour + 1
         else:
             spans.append([hour, hour + 1])
-    inside = " or ".join(f"(hour() >= {a} and hour() < {b})" for a, b in spans)
-    expr = f"({inside}) and (vector(time()) >= {int(start)})"
+    return spans
+
+
+def _annotation(name, expr, colour, step) -> dict:
     return {
-        "name": f"{seller} peak hours", "datasource": DS, "enable": True, "hide": False,
-        "iconColor": "rgba(255, 152, 0, 0.35)", "expr": expr, "step": "300s",
+        "name": name, "datasource": DS, "enable": True, "hide": False,
+        "iconColor": colour, "expr": expr, "step": step,
         "target": {"expr": expr, "refId": "peak", "legendFormat": ""},
-        "titleFormat": f"{seller} peak rate", "textFormat": "", "tagKeys": "",
+        "titleFormat": name, "textFormat": "", "tagKeys": "",
         "useValueForTime": "false",
     }
+
+
+def peak_annotations(seller, hours, start) -> list[dict]:
+    """A band over the hours a seller charges peak in, and a line at each flip.
+
+    Both are built from hour(), not from a recording rule: a rule would only
+    mark the hours since it was added, and the question is always about a week
+    that has already been paid for. Both are toggleable at the top of the board.
+    """
+    spans = hour_spans(hours)
+    began = f"(vector(time()) >= {int(start)})"
+    inside = " or ".join(f"(hour() >= {a} and hour() < {b})" for a, b in spans)
+
+    # A line needs exactly one sample; two consecutive ones draw a region instead.
+    flips = sorted({s % 24 for span in spans for s in span})
+    at_flip = " or ".join(f"hour() == {h}" for h in flips)
+    return [
+        _annotation(f"{seller} peak hours", f"({inside}) and {began}",
+                    "rgba(255, 152, 0, 0.20)", "300s"),
+        _annotation(f"{seller} rate change", f"(({at_flip}) and minute() < 15) and {began}",
+                    "rgb(255, 152, 0)", "900s"),
+    ]
 
 
 def dashboard(uid, title, description, L, *, refresh="15s", time_from="now-3h", tags=(),
@@ -655,8 +674,8 @@ def ai():
                      "list rates. Money, tokens, models, projects, and the delegated share. The "
                      "dropdowns narrow every panel to one harness, provider or model.",
                      L, time_from="now-7d", refresh="1m", tags=["ai", "cost"],
-                     annotations=[peak_annotation(seller, hours, start)
-                                  for seller, (hours, start) in peak_windows().items()],
+                     annotations=[a for seller, (hours, start) in peak_windows().items()
+                                  for a in peak_annotations(seller, hours, start)],
                      variables=[
                          filter_var("harness", "Harness", "aiusage_cost_usd_total"),
                          filter_var("provider", "Provider", "aiusage_cost_usd_total",
