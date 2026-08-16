@@ -59,7 +59,11 @@ for that fraction of the interval.
 | Series | Labels | Meaning |
 | --- | --- | --- |
 | `rig:cpu:busy_ratio` | — | 1 − idle, averaged over all threads |
-| `rig:cpu:user_ratio`, `:system_ratio`, `:iowait_ratio` | — | By mode. High `iowait` with high `psi:io_full` is a disk bottleneck. |
+| `rig:cpu:user_ratio`, `:system_ratio`, `:iowait_ratio`, `:nice_ratio`, `:steal_ratio`, `:irq_ratio` | — | By mode. High `iowait` with high `psi:io_full` is a disk bottleneck. `irq` sums hard and soft interrupts. |
+| `rig:cpu:core_busy_ratio` | `cpu` | Per hardware thread. The averaged `busy_ratio` cannot tell one saturated thread from every thread half busy. |
+| `rig:cpu:hottest_core_ratio` | — | The busiest single thread. **Pinned at 1.0 while the average is low is a single-threaded section, and the usual reason a GPU sits idle.** |
+| `rig:cpu:saturated_cores` | — | Threads above 90%. Equal to the thread count means the CPU is genuinely full. |
+| `rig:cpu:clock_hz`, `:clock_ratio` | — | Average clock, and its share of single-core boost. No all-core load reaches 1.0 — read the trend. |
 | `rig:mem:used_ratio` | — | 1 − available/total. Uses `MemAvailable`, so cache is not counted as used. |
 | `rig:mem:swap_used_bytes`, `:swap_used_ratio` | — | Swap occupancy |
 | `rig:mem:swap_pages_per_sec` | — | Pages moving through swap. **Sustained thousands is a thrash: the disk is serving memory, not work.** |
@@ -68,6 +72,32 @@ for that fraction of the interval.
 | `rig:disk:await_seconds` | `device` | Average wait per request. Tens of ms on NVMe means a deep queue, not a slow drive. |
 | `rig:disk:read_bytes_per_sec`, `:write_bytes_per_sec` | `device` | Throughput |
 | `rig:fs:used_ratio`, `rig:fs:avail_bytes` | `device`, `mountpoint` | Capacity. One device appears under every subvolume and bind mount it carries — aggregate `by (device)`. |
+
+---
+
+## `rig:gpu:` the graphics card — `prometheus/rules/15-gpu.yml`
+
+`rig:gpu_celsius` and `rig:gpu_watts` stay with the sensors above. Everything
+derived from the card is here.
+
+| Series | Labels | Meaning |
+| --- | --- | --- |
+| `rig:gpu:busy_ratio` | — | Shader time share. A time share, not an occupancy: one kernel on a single SM reads 100%. |
+| `rig:gpu:mem_busy_ratio` | — | Time the memory controller moved data. **Above `busy_ratio` means the card waits on its own VRAM, and more shader clock will not help.** |
+| `rig:gpu:encoder_ratio`, `:decoder_ratio` | — | NVENC and NVDEC. A screen recorder lives here and costs almost no shader time. |
+| `rig:gpu:vram_used_ratio` | — | Counted from free, not from nvidia-smi's `used`, which excludes the driver reserve. **The card refuses allocations near 0.85, not at 1.** |
+| `rig:gpu:vram_used_bytes`, `:vram_free_bytes`, `:vram_total_bytes` | — | The same in bytes. `free` is what the next allocation must fit in. |
+| `rig:gpu:sm_clock_hz`, `:mem_clock_hz` | — | Shader clock is continuous; memory clock steps between fixed levels. |
+| `rig:gpu:clock_ratio` | — | Shader clock over its maximum. No all-SM load reaches 1.0. |
+| `rig:gpu:power_ratio`, `:power_limit_watts` | — | Draw over the **enforced** limit, the one the driver clamps to and `nvidia-smi -pl` changes. At 1.0 the card is power-limited, which is ordinary. |
+| `rig:gpu:throttled_ratio` | `reason` | Share of wall time each reason held the clock down, from the card's counters rather than a 15s sample of a flag. `power cap` is ordinary; `thermal` points at [thermals.md](thermals.md); `power brake` is the PSU asserting a hardware line and never is. |
+| `rig:gpu:pcie_gen_ratio`, `:pcie_width_ratio` | — | Link state against maximum. **Both downtrain on an idle card, so a low reading only means anything while `busy_ratio` is high.** |
+| `rig:igpu:busy_ratio`, `:vram_used_bytes` | — | The integrated GPU, through DRM. Non-zero means something renders on it, which for a desktop session is usually a mistake. |
+
+VRAM has no swap and no OOM killer. System RAM overcommits and the machine gets
+slow; VRAM refuses, and the client that asked for it dies — the compositor
+included. `tools/vram-guard` caps `app.slice` so an application is refused first;
+[vram.md](vram.md) says why the threshold sits at 0.85 and not at 0.95.
 
 ---
 
@@ -172,7 +202,7 @@ Each alert carries a `diagnose` annotation naming the query that follows it up.
 `tools/rig alerts` prints the current set.
 
 Saturation: `RigIOStall`, `RigSwapThrash`, `RigLoadIOBound`, `RigCPUSaturated`,
-`RigMemoryExhausted`, `RigFilesystemFilling`.
+`RigMemoryExhausted`, `RigVRAMExhausted`, `RigFilesystemFilling`.
 Thermal: `RigGPUThrottleImminent`, `RigCPUHot`, `RigPumpStalled`,
 `RigCoolingNeedsCleaning`, `RigRadiatorNeedsCleaning`, `RigMountDegraded`.
 Hardware: `RigDiskWearHigh`, `RigDiskMediaErrors`, `RigDiskSmartFailing`.

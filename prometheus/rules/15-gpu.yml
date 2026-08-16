@@ -1,0 +1,106 @@
+# Layer 2 — the GPU, as machine state. Series reference: docs/metrics.md.
+# `rig:gpu_celsius` and `rig:gpu_watts` stay in 00-telemetry.yml: they are
+# sensor renames. Everything derived from the card is here.
+
+groups:
+
+  - name: rig-gpu
+    interval: 15s
+    rules:
+
+      # --- occupancy ------------------------------------------------------
+      # Shader cores busy. nvidia-smi calls this "utilization.gpu" and it is a
+      # time share, not an occupancy: one kernel using a single SM reads 100%.
+      - record: rig:gpu:busy_ratio
+        expr: max(nvidia_smi_utilization_gpu_ratio)
+
+      # Time the memory controller spent moving data. Read beside busy_ratio:
+      # high here with low there is a card waiting on its own VRAM bandwidth.
+      - record: rig:gpu:mem_busy_ratio
+        expr: max(nvidia_smi_utilization_memory_ratio)
+
+      - record: rig:gpu:encoder_ratio
+        expr: max(nvidia_smi_utilization_encoder_ratio)
+
+      - record: rig:gpu:decoder_ratio
+        expr: max(nvidia_smi_utilization_decoder_ratio)
+
+      # --- memory ---------------------------------------------------------
+      # Counted from free, not used: nvidia-smi's "used" excludes the driver
+      # reserve, and the card refuses allocations before used/total reaches 1.
+      - record: rig:gpu:vram_used_ratio
+        expr: 1 - (max(nvidia_smi_memory_free_bytes) / max(nvidia_smi_memory_total_bytes))
+
+      - record: rig:gpu:vram_free_bytes
+        expr: max(nvidia_smi_memory_free_bytes)
+
+      - record: rig:gpu:vram_used_bytes
+        expr: max(nvidia_smi_memory_total_bytes) - max(nvidia_smi_memory_free_bytes)
+
+      - record: rig:gpu:vram_total_bytes
+        expr: max(nvidia_smi_memory_total_bytes)
+
+      # --- clocks ---------------------------------------------------------
+      - record: rig:gpu:sm_clock_hz
+        expr: max(nvidia_smi_clocks_current_sm_clock_hz)
+
+      - record: rig:gpu:mem_clock_hz
+        expr: max(nvidia_smi_clocks_current_memory_clock_hz)
+
+      - record: rig:gpu:clock_ratio
+        expr: |
+          max(nvidia_smi_clocks_current_sm_clock_hz)
+          / max(nvidia_smi_clocks_max_sm_clock_hz)
+
+      # --- power ----------------------------------------------------------
+      # Against the enforced limit, not the card's maximum: the enforced one is
+      # what the driver actually clamps to, and a `nvidia-smi -pl` changes it.
+      - record: rig:gpu:power_ratio
+        expr: max(nvidia_smi_power_draw_watts) / max(nvidia_smi_enforced_power_limit_watts)
+
+      - record: rig:gpu:power_limit_watts
+        expr: max(nvidia_smi_enforced_power_limit_watts)
+
+      # --- why the clock is not at maximum --------------------------------
+      # From the counters rather than the boolean flags: a flag sampled every
+      # 15s misses a throttle that lasted 200 ms, and these are what the card
+      # accumulated between samples. The value is the fraction of wall time.
+      - record: rig:gpu:throttled_ratio
+        expr: |
+          label_replace(
+            max(rate(nvidia_smi_clocks_event_reasons_counters_sw_power_cap_seconds[5m])),
+            "reason", "power cap", "", "")
+          or
+          label_replace(
+            max(rate(nvidia_smi_clocks_event_reasons_counters_hw_power_brake_slowdown_seconds[5m])),
+            "reason", "power brake", "", "")
+          or
+          label_replace(
+            max(rate(nvidia_smi_clocks_event_reasons_counters_sw_thermal_slowdown_seconds[5m])),
+            "reason", "thermal (driver)", "", "")
+          or
+          label_replace(
+            max(rate(nvidia_smi_clocks_event_reasons_counters_hw_thermal_slowdown_seconds[5m])),
+            "reason", "thermal (hardware)", "", "")
+          or
+          label_replace(
+            max(rate(nvidia_smi_clocks_event_reasons_counters_sync_boost_seconds[5m])),
+            "reason", "sync boost", "", "")
+
+      # --- the link to the host -------------------------------------------
+      # Both downtrain on an idle card to save power, so a low reading only
+      # means something when the GPU is busy. Judge them against busy_ratio.
+      - record: rig:gpu:pcie_gen_ratio
+        expr: max(nvidia_smi_pcie_link_gen_current) / max(nvidia_smi_pcie_link_gen_max)
+
+      - record: rig:gpu:pcie_width_ratio
+        expr: max(nvidia_smi_pcie_link_width_current) / max(nvidia_smi_pcie_link_width_max)
+
+      # --- the other GPU ---------------------------------------------------
+      # The integrated one, through DRM rather than nvidia-smi. It reads zero
+      # unless the desktop is actually running on it.
+      - record: rig:igpu:busy_ratio
+        expr: max(node_drm_gpu_busy_percent) / 100
+
+      - record: rig:igpu:vram_used_bytes
+        expr: max(node_drm_memory_vram_used_bytes)

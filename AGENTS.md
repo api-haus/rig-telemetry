@@ -109,8 +109,8 @@ host-level figures.
 
 The five groups:
 
-- `rig:load:*`, `rig:psi:*`, `rig:cpu:*`, `rig:mem:*`, `rig:disk:*`, `rig:fs:*`
-  — machine state.
+- `rig:load:*`, `rig:psi:*`, `rig:cpu:*`, `rig:gpu:*`, `rig:mem:*`, `rig:disk:*`,
+  `rig:fs:*` — machine state.
 - `rig:proc:*` and `rig:container:*` — attribution, keyed by `groupname` /
   `name`. **This is the "who" namespace.**
 - `rig:temp_celsius`, `rig:fan_rpm`, `rig:*_celsius` — sensors, by name.
@@ -145,6 +145,12 @@ count_over_time(ALERTS{alertname="RigIOStall", alertstate="firing"}[30d]) * 15
 
 # when will this filesystem fill
 predict_linear(node_filesystem_avail_bytes{mountpoint="/"}[7d], 30*86400)
+
+# which end the work is stuck at: all four readings in one answer
+{__name__=~"rig:(cpu:busy_ratio|cpu:hottest_core_ratio|gpu:busy_ratio|gpu:mem_busy_ratio)"}
+
+# what held the GPU clock down, by reason
+topk(3, rig:gpu:throttled_ratio)
 
 # cooling efficiency now vs a month ago; >1.15 means dust
 rig:thermal:gpu_degradation_ratio

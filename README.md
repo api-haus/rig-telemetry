@@ -69,8 +69,9 @@ scraped every 60s — spend moves in turns, not in seconds.
 
 | Dashboard | For |
 | --- | --- |
-| **Rig — Overview** | Is the bottleneck CPU, memory or disk, and who owns it |
+| **Rig — Overview** | Is the bottleneck CPU, GPU, memory or disk, and who owns it |
 | **Rig — Who** | Every resource attributed to a named process group |
+| **Rig — Compute** | Which end the work is stuck at, then CPU and GPU in depth |
 | **Rig — Thermals** | Temperatures, and cooling efficiency against a month-old baseline |
 | **Rig — Storage** | Throughput, queue latency, capacity, drive endurance |
 | **Rig — AI Spend** | What every coding harness used, at API list prices |

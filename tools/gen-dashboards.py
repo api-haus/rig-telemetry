@@ -318,8 +318,17 @@ def overview():
          thresholds=steps(("yellow", 75), ("orange", 85), ("red", 92)))
     stat(L, "GPU temp", "rig:gpu_celsius", unit="celsius",
          thresholds=steps(("yellow", 75), ("orange", 83), ("red", 87)))
+    stat(L, "GPU busy", "rig:gpu:busy_ratio", unit="percentunit", w=6,
+         desc="Shader time share. Depth is on the Compute dashboard.")
+    stat(L, "VRAM used", "rig:gpu:vram_used_ratio", unit="percentunit", w=6,
+         desc="Nothing kills a GPU client politely — there is no OOM killer for VRAM. "
+              "The card starts refusing allocations near 0.85, not at 1.",
+         thresholds=steps(("yellow", 0.7), ("orange", 0.85), ("red", 0.95)))
+    stat(L, "VRAM free", "rig:gpu:vram_free_bytes", unit="bytes", w=6,
+         desc="What is left for the next model, game or compositor buffer.")
+    stat(L, "GPU power", "rig:gpu_watts", unit="watt", w=6)
 
-    L.row("Is it CPU, memory, or disk?")
+    L.row("Is it CPU, GPU, memory, or disk?")
     ts(L, "Load average, split", [
         ("rig:load:runnable", "runnable (wants CPU)"),
         ("rig:load:blocked", "blocked (waiting on IO)"),
@@ -340,6 +349,19 @@ def overview():
         ("rig:mem:used_ratio", "memory used"),
         ("rig:mem:swap_used_ratio", "swap used"),
     ], unit="percentunit", max_=1)
+    ts(L, "CPU against GPU", [
+        ("rig:cpu:busy_ratio", "CPU, all threads"),
+        ("rig:cpu:hottest_core_ratio", "CPU, busiest single thread"),
+        ("rig:gpu:busy_ratio", "GPU shaders"),
+    ], unit="percentunit", max_=1,
+       desc="A pegged single thread under an idle GPU is a GPU waiting on the CPU, and neither "
+            "figure alone says so. The Compute dashboard breaks both down.")
+    ts(L, "RAM against VRAM", [
+        ("rig:mem:used_ratio", "system RAM"),
+        ("rig:gpu:vram_used_ratio", "VRAM"),
+    ], unit="percentunit", max_=1,
+       desc="RAM overcommits into swap and gets slow. VRAM does not overcommit: it refuses, and "
+            "the client that asked dies.")
 
     L.row("Who")
     ts(L, "CPU by process group", [("topk(8, rig:proc:cpu_cores)", "{{groupname}}")],
@@ -529,7 +551,214 @@ def storage():
 
 
 # --------------------------------------------------------------------------
-# 5. AI — what the coding harnesses spent, at API list prices
+# 5. Compute — the two processors, together first and then each in depth
+# --------------------------------------------------------------------------
+
+def compute():
+    L = Layout()
+    L.row("Together")
+    stat(L, "CPU busy", "rig:cpu:busy_ratio", unit="percentunit", w=4,
+         desc="Averaged over every thread. On its own it cannot tell one saturated core from "
+              "every core half busy.",
+         thresholds=steps(("yellow", 0.7), ("orange", 0.9)))
+    stat(L, "Busiest thread", "rig:cpu:hottest_core_ratio", unit="percentunit", w=4,
+         desc="The hottest single thread. Pinned at 1.0 while the average sits low is a "
+              "single-threaded section, and it is what usually starves a GPU.",
+         thresholds=steps(("yellow", 0.8), ("orange", 0.95)))
+    stat(L, "GPU shaders", "rig:gpu:busy_ratio", unit="percentunit", w=4,
+         thresholds=steps(("yellow", 0.7), ("orange", 0.9)))
+    stat(L, "GPU memory bus", "rig:gpu:mem_busy_ratio", unit="percentunit", w=4,
+         desc="Time the memory controller moved data. Above the shader figure means the card is "
+              "waiting on its own VRAM, and more shader clock will not help.",
+         thresholds=steps(("yellow", 0.7), ("orange", 0.9)))
+    stat(L, "VRAM used", "rig:gpu:vram_used_ratio", unit="percentunit", w=4,
+         thresholds=steps(("yellow", 0.7), ("orange", 0.85), ("red", 0.95)))
+    stat(L, "RAM used", "rig:mem:used_ratio", unit="percentunit", w=4,
+         thresholds=steps(("yellow", 0.8), ("orange", 0.9), ("red", 0.95)))
+
+    ts(L, "Busy: CPU against GPU", [
+        ("rig:cpu:busy_ratio", "CPU, all threads"),
+        ("rig:cpu:hottest_core_ratio", "CPU, busiest thread"),
+        ("rig:gpu:busy_ratio", "GPU shaders"),
+        ("rig:gpu:mem_busy_ratio", "GPU memory bus"),
+    ], unit="percentunit", max_=1,
+       desc=("The four readings that decide which end the work is stuck at. Both high: the "
+             "machine is working. GPU high, CPU low: GPU bound, and the CPU has nothing to do. "
+             "GPU low with the busiest thread pinned: the GPU is starved by one thread feeding "
+             "it. Both low with the load average up: neither processor is the problem — look "
+             "at Storage."))
+    ts(L, "Memory: RAM against VRAM", [
+        ("rig:mem:used_ratio", "system RAM"),
+        ("rig:gpu:vram_used_ratio", "VRAM"),
+        ("rig:mem:swap_used_ratio", "swap"),
+    ], unit="percentunit", max_=1,
+       desc=("The two pools behave differently under pressure. RAM overcommits into swap and the "
+             "machine gets slow. VRAM has no swap and no OOM killer: the driver refuses the "
+             "allocation and the client that asked for it dies, compositor included."))
+    ts(L, "Clock, as a share of maximum", [
+        ("rig:cpu:clock_ratio", "CPU vs. single-core boost"),
+        ("rig:gpu:clock_ratio", "GPU vs. maximum SM clock"),
+    ], unit="percentunit", max_=1,
+       desc=("Neither line reaches 1.0 under an all-core or all-SM load, so read the trend, not "
+             "the value. Both falling together is one power or thermal envelope holding both "
+             "parts down."))
+    ts(L, "Power and heat", [
+        ("rig:gpu_watts", "GPU watts"),
+        ("rig:gpu:power_limit_watts", "GPU limit (W)"),
+        ("rig:gpu_celsius", "GPU (C)"),
+        ("rig:cpu_celsius", "CPU (C)"),
+    ], unit="none",
+       desc="Mixed units on one axis on purpose: the question is whether power and temperature "
+            "move together, not what either is worth. Thermals has the calibrated version.")
+    ts(L, "CPU cores held, by process group", [("topk(8, rig:proc:cpu_cores)", "{{groupname}}")],
+       unit="none", stack=True,
+       desc="Pair this with the GPU panel beside it — the crosshair is shared across the board, "
+            "so hovering names the group that was running when the GPU rose or fell.")
+    ts(L, "GPU engines", [
+        ("rig:gpu:busy_ratio", "shaders"),
+        ("rig:gpu:mem_busy_ratio", "memory bus"),
+        ("rig:gpu:encoder_ratio", "encoder (NVENC)"),
+        ("rig:gpu:decoder_ratio", "decoder (NVDEC)"),
+    ], unit="percentunit", max_=1,
+       desc="A screen recorder or a video call lives on the encoder line and costs almost no "
+            "shader time.")
+
+    L.row("CPU")
+    ts(L, "Every thread", [("rig:cpu:core_busy_ratio", "cpu{{cpu}}")],
+       unit="percentunit", max_=1, w=16, h=10, legend_calcs=("last", "max"),
+       desc="One line per hardware thread. A flat band of lines at the same height is a "
+            "parallel build; one line alone at the top is a section that cannot be split.")
+    ts(L, "Threads above 90%", [("rig:cpu:saturated_cores", "saturated threads")],
+       unit="none", w=8, h=10, fill=30,
+       desc="The same picture as one number. Equal to the thread count means the CPU is "
+            "genuinely full; 1 means one thread is, and the other twenty-three are waiting "
+            "for it.")
+    ts(L, "Time by mode", [
+        ("rig:cpu:user_ratio", "user"),
+        ("rig:cpu:system_ratio", "system (kernel)"),
+        ("rig:cpu:nice_ratio", "nice (background)"),
+        ("rig:cpu:iowait_ratio", "iowait"),
+        ("rig:cpu:irq_ratio", "interrupts"),
+        ("rig:cpu:steal_ratio", "steal"),
+    ], unit="percentunit", stack=True, max_=1,
+       desc=("The full split, not the three the Overview shows. A large system band is syscall "
+             "or page-fault cost rather than the program's own work; a large interrupt band is "
+             "a device, usually the network."))
+    ts(L, "Load average, split", [
+        ("rig:load:runnable", "runnable (wants CPU)"),
+        ("rig:load:blocked", "blocked (waiting on IO)"),
+    ], stack=True, unit="none",
+       desc="Only the runnable half is a CPU problem. The blocked half belongs to Storage.")
+    ts(L, "Clock", [("rig:cpu:clock_hz", "average across threads")], unit="hertz",
+       desc="Averaged over every thread, so a boosting core and a parked one blend. Falls under "
+            "an all-core load by design, and again under heat.")
+    ts(L, "Pressure: CPU", [("rig:psi:cpu_some", "some task queued for CPU")],
+       unit="percentunit", max_=1,
+       desc="The share of time at least one runnable task was waiting for a thread. Rises before "
+            "busy_ratio saturates, which makes it the earlier warning.")
+    ts(L, "Context switches by process group",
+       [("topk(8, rig:proc:context_switches_per_sec)", "{{groupname}}")], unit="none", stack=True,
+       desc="Scheduling churn. A group high here and low on cores held is spending its time "
+            "being descheduled, not computing.")
+    ts(L, "Threads by process group", [("topk(8, rig:proc:threads)", "{{groupname}}")],
+       unit="none", stack=True,
+       desc="Thread counts far above the CPU's own is where the context switches come from.")
+    table(L, "Top CPU now (cores held)", [("topk(15, rig:proc:cpu_cores)", "")],
+          w=12, unit="none", rename={"groupname": "group"},
+          desc="Cores, not percent. 4.0 is four threads solid.")
+    table(L, "Scaling governor", [
+        ("count by (governor) (node_cpu_scaling_governor == 1)", ""),
+    ], w=12, unit="none", rename={"Value": "threads"},
+        desc="Threads under each governor. `schedutil` ramps on demand and lags a short burst; "
+             "`performance` holds the clock up and costs idle watts. A split between two of "
+             "them is a machine that was reconfigured half way.")
+
+    L.row("GPU")
+    stat(L, "Shaders", "rig:gpu:busy_ratio", unit="percentunit", w=3,
+         thresholds=steps(("yellow", 0.7), ("orange", 0.9)))
+    stat(L, "Memory bus", "rig:gpu:mem_busy_ratio", unit="percentunit", w=3,
+         thresholds=steps(("yellow", 0.7), ("orange", 0.9)))
+    stat(L, "VRAM free", "rig:gpu:vram_free_bytes", unit="bytes", w=3,
+         desc="What the next allocation has to fit in.",
+         thresholds=steps(("red", 512 << 20), ("orange", 1 << 30), ("yellow", 2 << 30),
+                          base="green"))
+    stat(L, "VRAM used", "rig:gpu:vram_used_ratio", unit="percentunit", w=3,
+         thresholds=steps(("yellow", 0.7), ("orange", 0.85), ("red", 0.95)))
+    stat(L, "Power against limit", "rig:gpu:power_ratio", unit="percentunit", w=3,
+         desc="At 1.0 the card is clock-limited by its power budget, which is normal under load "
+              "and is the commonest reason the clock sits below maximum.",
+         thresholds=steps(("yellow", 0.9)))
+    stat(L, "SM clock", "rig:gpu:sm_clock_hz", unit="hertz", w=3)
+    stat(L, "Throttle headroom", "rig:thermal:gpu_headroom_c", unit="celsius", w=3,
+         desc="Degrees before the card slows itself down.",
+         thresholds=steps(("orange", 5), ("yellow", 10), ("green", 15), base="red"))
+    stat(L, "Throttled", "sum(rig:gpu:throttled_ratio)", unit="percentunit", w=3,
+         desc="Total share of time any reason held the clock down. The panel below says which.",
+         thresholds=steps(("yellow", 0.1), ("orange", 0.5)))
+
+    ts(L, "VRAM", [
+        ("rig:gpu:vram_used_bytes", "used"),
+        ("rig:gpu:vram_total_bytes", "installed"),
+    ], unit="bytes", fill=20,
+       desc=("Used is counted as installed minus free, which is the number the driver allocates "
+             "against. nvidia-smi's own 'used' excludes its reserve, so it stops short of the "
+             "total by a few hundred MiB even on a card that is refusing allocations."))
+    ts(L, "Why the clock is not at maximum",
+       [("rig:gpu:throttled_ratio", "{{reason}}")], unit="percentunit", stack=True, max_=1,
+       desc=("Share of wall time each reason held the clock down, from the card's own counters "
+             "rather than a 15-second sample of a flag. `power cap` is ordinary under load. "
+             "`thermal` means the cooler, and Thermals says whether that is dust. `power brake` "
+             "is the PSU asserting a hardware line and is never ordinary."))
+    ts(L, "Clocks", [
+        ("rig:gpu:sm_clock_hz", "shader"),
+        ("rig:gpu:mem_clock_hz", "memory"),
+    ], unit="hertz",
+       desc="Memory clock steps between a handful of fixed levels; shader clock is continuous. "
+            "The memory clock dropping to its lowest step is the card deciding it is idle.")
+    ts(L, "Power", [
+        ("rig:gpu_watts", "draw"),
+        ("rig:gpu:power_limit_watts", "enforced limit"),
+    ], unit="watt", thresholds=True,
+       desc="Draw pressed flat against the limit for minutes is a power-limited card, not a "
+            "broken one. `nvidia-smi -pl` moves the limit line.")
+    ts(L, "Temperature against power", [
+        ("rig:gpu_celsius", "temp (C)"),
+        ("rig:gpu_watts", "power (W)"),
+        ("rig:thermal:gpu_fan_ratio * 100", "fan (%)"),
+    ], unit="none",
+       desc="Rising temperature at equal power and equal fan is the cooler getting worse. "
+            "Thermals turns this into a month-over-month ratio.")
+    ts(L, "Link to the host", [
+        ("rig:gpu:pcie_gen_ratio", "generation, share of maximum"),
+        ("rig:gpu:pcie_width_ratio", "lane width, share of maximum"),
+    ], unit="percentunit", max_=1,
+       desc=("Both drop on an idle card to save power, so only a low reading while the GPU is "
+             "busy means anything. A card stuck at half width under load is seated wrong or "
+             "sharing lanes with an NVMe drive."))
+    ts(L, "Encoder sessions", [
+        ("max(nvidia_smi_encoder_stats_session_count)", "sessions"),
+        ("max(nvidia_smi_encoder_stats_average_fps)", "average fps"),
+        ("max(nvidia_smi_encoder_stats_average_latency)", "average latency (us)"),
+    ], unit="none",
+       desc="Screen recording, streaming and video calls. Latency climbing while the session "
+            "count holds is the encoder queue backing up.")
+    ts(L, "Integrated GPU", [
+        ("rig:igpu:busy_ratio", "busy"),
+        ("rig:igpu:vram_used_bytes / 1e9", "VRAM used (GB)"),
+    ], unit="none",
+       no_value="The integrated GPU is idle — the desktop is running on the discrete card.",
+       desc="Read through DRM rather than nvidia-smi. Non-zero here means something is rendering "
+            "on the integrated GPU, which for a desktop session is usually a mistake.")
+
+    return dashboard("rig-compute", "Rig — Compute",
+                     "CPU and GPU, together first: which end the work is stuck at, then each "
+                     "processor in depth. Per-thread CPU occupancy, the full mode split, GPU "
+                     "engines, VRAM, clocks, power and the card's own throttle reasons.",
+                     L, tags=["cpu", "gpu"])
+
+
+# --------------------------------------------------------------------------
+# 6. AI — what the coding harnesses spent, at API list prices
 # --------------------------------------------------------------------------
 
 LIST_PRICE = ("Every dollar here is API list value: what these tokens would cost billed through "
@@ -695,6 +924,7 @@ def ai():
 BOARDS = {
     "rig-overview.json": overview,
     "rig-who.json": who,
+    "rig-compute.json": compute,
     "rig-thermals.json": thermals,
     "rig-storage.json": storage,
     "rig-ai.json": ai,

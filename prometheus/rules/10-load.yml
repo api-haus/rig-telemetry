@@ -53,6 +53,41 @@ groups:
       - record: rig:cpu:user_ratio
         expr: avg(rate(node_cpu_seconds_total{mode="user"}[5m]))
 
+      - record: rig:cpu:nice_ratio
+        expr: avg(rate(node_cpu_seconds_total{mode="nice"}[5m]))
+
+      - record: rig:cpu:steal_ratio
+        expr: avg(rate(node_cpu_seconds_total{mode="steal"}[5m]))
+
+      # Both halves of interrupt handling. Kept together because no answer ever
+      # depends on which half a network card's cost landed in.
+      - record: rig:cpu:irq_ratio
+        expr: |
+          avg(rate(node_cpu_seconds_total{mode="irq"}[5m]))
+          + avg(rate(node_cpu_seconds_total{mode="softirq"}[5m]))
+
+      # Per thread, keeping the `cpu` label. The averaged busy_ratio above
+      # cannot tell one saturated core from every core half busy, and those are
+      # different problems: the first is a single-threaded section.
+      - record: rig:cpu:core_busy_ratio
+        expr: 1 - sum by (cpu) (rate(node_cpu_seconds_total{mode="idle"}[5m]))
+
+      - record: rig:cpu:hottest_core_ratio
+        expr: max(rig:cpu:core_busy_ratio)
+
+      - record: rig:cpu:saturated_cores
+        expr: count(rig:cpu:core_busy_ratio > 0.9) or vector(0)
+
+      - record: rig:cpu:clock_hz
+        expr: avg(node_cpu_scaling_frequency_hertz)
+
+      # Against single-core boost, which no all-core load ever reaches. Read it
+      # as distance from boost, not as a fault.
+      - record: rig:cpu:clock_ratio
+        expr: |
+          avg(node_cpu_scaling_frequency_hertz)
+          / max(node_cpu_scaling_frequency_max_hertz)
+
       # --- memory ---------------------------------------------------------
       - record: rig:mem:used_ratio
         expr: 1 - max(node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)

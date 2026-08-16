@@ -635,16 +635,284 @@
       "id": 9
     },
     {
+      "type": "stat",
+      "title": "GPU busy",
+      "description": "Shader time share. Depth is on the Compute dashboard.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:gpu:busy_ratio",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 32
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 5
+      },
+      "id": 10
+    },
+    {
+      "type": "stat",
+      "title": "VRAM used",
+      "description": "Nothing kills a GPU client politely \u2014 there is no OOM killer for VRAM. The card starts refusing allocations near 0.85, not at 1.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:gpu:vram_used_ratio",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.7
+              },
+              {
+                "color": "orange",
+                "value": 0.85
+              },
+              {
+                "color": "red",
+                "value": 0.95
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 32
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 5
+      },
+      "id": 11
+    },
+    {
+      "type": "stat",
+      "title": "VRAM free",
+      "description": "What is left for the next model, game or compositor buffer.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:gpu:vram_free_bytes",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 32
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 5
+      },
+      "id": 12
+    },
+    {
+      "type": "stat",
+      "title": "GPU power",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:gpu_watts",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 32
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 5
+      },
+      "id": 13
+    },
+    {
       "type": "row",
-      "title": "Is it CPU, memory, or disk?",
+      "title": "Is it CPU, GPU, memory, or disk?",
       "collapsed": false,
-      "id": 10,
+      "id": 14,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 9
       }
     },
     {
@@ -729,9 +997,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 6
+        "y": 10
       },
-      "id": 11
+      "id": 15
     },
     {
       "type": "timeseries",
@@ -833,9 +1101,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 10
       },
-      "id": 12
+      "id": 16
     },
     {
       "type": "timeseries",
@@ -930,9 +1198,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 14
+        "y": 18
       },
-      "id": 13
+      "id": 17
     },
     {
       "type": "timeseries",
@@ -1012,21 +1280,196 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 14
+        "y": 18
       },
-      "id": 14
+      "id": 18
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU against GPU",
+      "description": "A pegged single thread under an idle GPU is a GPU waiting on the CPU, and neither figure alone says so. The Compute dashboard breaks both down.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:cpu:busy_ratio",
+          "legendFormat": "CPU, all threads",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "rig:cpu:hottest_core_ratio",
+          "legendFormat": "CPU, busiest single thread",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "rig:gpu:busy_ratio",
+          "legendFormat": "GPU shaders",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": 1
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "id": 19
+    },
+    {
+      "type": "timeseries",
+      "title": "RAM against VRAM",
+      "description": "RAM overcommits into swap and gets slow. VRAM does not overcommit: it refuses, and the client that asked dies.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:mem:used_ratio",
+          "legendFormat": "system RAM",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "rig:gpu:vram_used_ratio",
+          "legendFormat": "VRAM",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": 1
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "id": 20
     },
     {
       "type": "row",
       "title": "Who",
       "collapsed": false,
-      "id": 15,
+      "id": 21,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 34
       }
     },
     {
@@ -1100,9 +1543,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 23
+        "y": 35
       },
-      "id": 16
+      "id": 22
     },
     {
       "type": "timeseries",
@@ -1175,9 +1618,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 23
+        "y": 35
       },
-      "id": 17
+      "id": 23
     },
     {
       "type": "timeseries",
@@ -1250,9 +1693,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 31
+        "y": 43
       },
-      "id": 18
+      "id": 24
     },
     {
       "type": "timeseries",
@@ -1325,21 +1768,21 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 31
+        "y": 43
       },
-      "id": 19
+      "id": 25
     },
     {
       "type": "row",
       "title": "Machine",
       "collapsed": false,
-      "id": 20,
+      "id": 26,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 51
       }
     },
     {
@@ -1409,9 +1852,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 40
+        "y": 52
       },
-      "id": 21
+      "id": 27
     },
     {
       "type": "timeseries",
@@ -1480,9 +1923,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 40
+        "y": 52
       },
-      "id": 22
+      "id": 28
     },
     {
       "type": "table",
@@ -1553,9 +1996,9 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 40
+        "y": 52
       },
-      "id": 23
+      "id": 29
     }
   ],
   "templating": {
