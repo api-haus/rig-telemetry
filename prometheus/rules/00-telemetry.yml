@@ -45,3 +45,8 @@ groups:
 
       - record: rig:gpu_watts
         expr: max(nvidia_smi_power_draw_watts)
+
+      # Counted from free, not used: nvidia-smi's "used" excludes the driver
+      # reserve, and the card refuses allocations before used/total reaches 1.
+      - record: rig:gpu:vram_used_ratio
+        expr: 1 - (max(nvidia_smi_memory_free_bytes) / max(nvidia_smi_memory_total_bytes))

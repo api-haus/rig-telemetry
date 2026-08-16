@@ -46,6 +46,16 @@ groups:
           summary: "Memory {{ $value | humanizePercentage }} used"
           diagnose: "topk(5, rig:proc:rss_proportional_bytes)"
 
+      # 0.85, not 0.95: BAR1 address space runs out before the frame buffer
+      # does, so the driver starts refusing while the card still reads ~80% full.
+      - alert: RigVRAMExhausted
+        expr: rig:gpu:vram_used_ratio > 0.85
+        for: 2m
+        labels: {severity: critical, domain: gpu}
+        annotations:
+          summary: "VRAM {{ $value | humanizePercentage }} used — GPU clients will start dying"
+          diagnose: "tools/vram-guard status — the cap on app.slice refuses an application before the compositor. docs/vram.md"
+
       - alert: RigFilesystemFilling
         expr: max by (device) (rig:fs:used_ratio) > 0.90
         for: 30m
