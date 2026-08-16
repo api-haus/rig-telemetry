@@ -136,29 +136,51 @@ def cmd_status(args) -> int:
                 ok = False
 
     print("\nBAR1 (the window the CPU reaches VRAM through)")
-    for line in bar1_state():
+    for line in bar1_state(next(iter(capacity))):
         print(f"  {line}")
     return 0 if ok else 1
 
 
-def bar1_state() -> list[str]:
+PREFETCHABLE = 0x200 | 0x2000  # IORESOURCE_MEM | IORESOURCE_PREFETCH
+
+
+def widest_window(dev: pathlib.Path) -> int:
+    """Largest prefetchable window the parent bridge decodes. A BAR cannot exceed it."""
+    widest = 0
+    for line in (dev.parent / "resource").read_text().split("\n"):
+        if not line.strip():
+            continue
+        start, end, flags = (int(f, 16) for f in line.split())
+        if end > start and int(flags) & PREFETCHABLE == PREFETCHABLE:
+            widest = max(widest, end - start + 1)
+    return widest
+
+
+def bar1_state(region: str) -> list[str]:
+    """region looks like nvidia/0000:01:00/vidmem, which names the PCI device."""
     out = []
     try:
         params = pathlib.Path("/proc/driver/nvidia/params").read_text()
         rebar = [l for l in params.split("\n") if l.startswith("EnableResizableBar")]
-        out += [f"driver      {rebar[0] if rebar else 'EnableResizableBar: unknown'}"]
+        out.append(f"driver      {rebar[0] if rebar else 'EnableResizableBar: unknown'}")
     except OSError:
         return ["driver      nvidia not loaded"]
+
+    dev = pathlib.Path("/sys/bus/pci/devices") / f"{region.split('/')[1]}.0"
     try:
-        lspci = subprocess.run(
-            ["lspci", "-vv"], capture_output=True, text=True, timeout=10
-        ).stdout
-        for line in lspci.split("\n"):
-            if "BAR 1: current size" in line:
-                out.append(f"hardware    {line.strip()}")
-                break
-    except (OSError, subprocess.SubprocessError):
-        pass
+        # Bit n of the resize capability means the BAR can be 2^n MiB wide.
+        mask = int((dev / "resource1_resize").read_text().strip(), 16)
+        largest = (1 << max(i for i in range(64) if mask >> i & 1)) << 20
+        bar1 = (dev / "resource").read_text().split("\n")[1].split()
+        current = int(bar1[1], 16) - int(bar1[0], 16) + 1
+        window = widest_window(dev.resolve())
+        out.append(f"BAR1        {gib(current)} now, {gib(largest)} supported by the card")
+        out.append(f"firmware    {gib(window)} prefetchable window on the root port")
+        if window < largest:
+            out.append("            too small for a resized BAR — enable Re-Size BAR")
+            out.append("            Support in firmware, then reboot")
+    except (OSError, ValueError, IndexError):
+        out.append("BAR1        resize capability not readable")
     return out
 
 

@@ -101,22 +101,47 @@ manager, and the drop-in recreates it if it is missing. `status` reports
 
 ## BAR1
 
-BAR1 is the window the CPU reaches GPU memory through. It is a second ceiling,
-and a much lower one: it fills before the frame buffer does, which is how a card
-refuses work while reading 80 percent full.
+A Base Address Register is an address window the CPU reaches a PCI device
+through. BAR1 is the one that reaches video memory. It is a window onto VRAM,
+not VRAM itself: the card holds 16 GiB, and by default the CPU can see 256 MiB
+of it at a time.
 
-The card here supports a BAR1 of 64 MiB to 16 GiB. The NVIDIA Linux driver
-leaves it at 256 MiB, because `NVreg_EnableResizableBar` has defaulted to 0
-since the option appeared in 530.30.02. `install` writes
+Anything the CPU must touch needs a slot in that window — buffer uploads, mapped
+buffers, the compositor's imported buffers. The driver keeps a mapping database
+and recycles slots. When the window has no free address space, the driver cannot
+create the next mapping and fails, which is the
+`reusemappingdbMap(&pBar1VaInfo->reuseDb, ...)` assert at `kern_bus_gm107.c:3151`.
+This is a second ceiling and a much lower one, so a card can refuse work while
+the frame buffer still reads 80 percent full.
+
+Resizable BAR widens BAR1 to cover the whole frame buffer. It does not add
+memory and it does not stop VRAM exhaustion. It removes the lower of the two
+ceilings, so the only way left to refuse an allocation is the one the cap
+arbitrates.
+
+Two settings have to agree.
+
+**Driver.** `NVreg_EnableResizableBar` has defaulted to 0 since the option
+appeared in 530.30.02. `install` writes
 `/etc/modprobe.d/50-rig-nvidia-resizable-bar.conf` and rebuilds the initramfs,
-which the `modconf` hook copies `modprobe.d` into. It takes effect at the next
-boot.
+which the `modconf` hook copies `modprobe.d` into. To revert, delete that file,
+run `mkinitcpio -P`, and reboot. `--no-resizable-bar` skips it at install time.
 
-To revert, delete that file, run `mkinitcpio -P`, and reboot. `--no-resizable-bar`
-skips it at install time.
+**Firmware.** The BAR has to fit inside the prefetchable window the firmware
+gave the GPU's root port. `Above 4G Decoding` alone is not enough: it publishes
+a large window on the host bridge, but the root port keeps a small one below
+4 GiB until `Re-Size BAR Support` is also on. `status` reads both and says so:
 
-The firmware side is already correct: `Above 4G Decoding` is on, and the host
-bridge publishes a 1 TiB window above 4 GiB for the larger BAR to live in.
+```
+BAR1        0.25 GiB now, 16.00 GiB supported by the card
+firmware    0.56 GiB prefetchable window on the root port
+            too small for a resized BAR — enable Re-Size BAR
+            Support in firmware, then reboot
+```
+
+A 0.56 GiB window cannot hold a 16 GiB BAR, so the driver would fall back to
+256 MiB whatever the module option says. Both lines have to be satisfied before
+`nvidia-smi -q -d MEMORY` reports a BAR1 total larger than 256 MiB.
 
 ## Telemetry
 
