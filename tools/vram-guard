@@ -1,0 +1,286 @@
+#!/usr/bin/env python3
+"""vram-guard — give VRAM the arbitration layer that system RAM already has.
+
+Linux caps device memory with the cgroup v2 `dmem` controller. systemd does not
+propagate it and has no directive for it, so nothing turns it on. This does:
+it delegates `dmem` down to the user manager and caps `app.slice`, which leaves
+the compositor in `session.slice` with headroom when an application fills the
+card.
+
+Python standard library only, like `rig`: it has to work when the desktop does
+not. `docs/vram.md` explains why the cap sits where it does.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import pathlib
+import subprocess
+import sys
+
+CGROUP = pathlib.Path("/sys/fs/cgroup")
+DROPIN = pathlib.Path("/etc/systemd/system/user@.service.d/50-rig-vram-guard.conf")
+MODPROBE = pathlib.Path("/etc/modprobe.d/50-rig-nvidia-resizable-bar.conf")
+DEFAULT_RESERVE = 2560 << 20  # session.slice headroom; measured use is ~700 MiB
+
+
+def regions(name: str) -> dict[str, str]:
+    """Parse a dmem file into {region: value}. Empty when dmem is not delegated."""
+    path = CGROUP / name
+    try:
+        text = path.read_text()
+    except OSError:
+        return {}
+    out = {}
+    for line in text.split("\n"):
+        if line.strip():
+            region, value = line.rsplit(" ", 1)
+            out[region] = value
+    return out
+
+
+def read_regions(cg: pathlib.Path, name: str) -> dict[str, str]:
+    try:
+        text = (cg / name).read_text()
+    except OSError:
+        return {}
+    return dict(line.rsplit(" ", 1) for line in text.split("\n") if line.strip())
+
+
+def gib(n: float) -> str:
+    return f"{n / (1 << 30):.2f} GiB"
+
+
+def user_chain(uid: int) -> list[pathlib.Path]:
+    return [
+        CGROUP / "user.slice",
+        CGROUP / "user.slice" / f"user-{uid}.slice",
+        CGROUP / "user.slice" / f"user-{uid}.slice" / f"user@{uid}.service",
+    ]
+
+
+def app_slice(uid: int) -> pathlib.Path:
+    return user_chain(uid)[-1] / "app.slice"
+
+
+def delegate(cg: pathlib.Path) -> str:
+    """Enable dmem in a cgroup's subtree_control. Idempotent."""
+    control = cg / "cgroup.subtree_control"
+    if "dmem" in control.read_text().split():
+        return "already"
+    control.write_text("+dmem")
+    return "enabled"
+
+
+def cmd_apply(args) -> int:
+    """Never fails: this runs from user@.service, where a non-zero exit blocks login."""
+    uid = args.uid
+    if uid < 1000:
+        print(f"uid {uid} is a system user, skipped", file=sys.stderr)
+        return 0
+    try:
+        capacity = regions("dmem.capacity")
+        if not capacity:
+            print("no dmem regions: kernel or driver does not register any", file=sys.stderr)
+            return 0
+        for cg in user_chain(uid):
+            if not cg.is_dir():
+                print(f"{cg} absent, stopping", file=sys.stderr)
+                return 0
+            print(f"{cg.name}: dmem {delegate(cg)}", file=sys.stderr)
+
+        target = app_slice(uid)
+        target.mkdir(exist_ok=True)
+        for region, cap in capacity.items():
+            limit = max(int(cap) - args.reserve, 1 << 30)
+            (target / "dmem.max").write_text(f"{region} {limit}")
+            print(f"app.slice: {region} capped at {gib(limit)}", file=sys.stderr)
+    except OSError as e:
+        print(f"vram-guard apply failed, session left uncapped: {e}", file=sys.stderr)
+    return 0
+
+
+def cmd_status(args) -> int:
+    uid = args.uid
+    capacity = regions("dmem.capacity")
+    if not capacity:
+        print("dmem: no regions registered — controller absent or driver too old")
+        return 1
+    for region, cap in capacity.items():
+        print(f"region      {region}")
+        print(f"capacity    {gib(int(cap))}")
+        print(f"in use      {gib(int(regions('dmem.current').get(region, 0)))}")
+
+    print("\ndelegation")
+    for cg in user_chain(uid):
+        state = "absent"
+        if cg.is_dir():
+            state = "dmem" if "dmem" in (cg / "cgroup.subtree_control").read_text().split() else "-"
+        print(f"  {str(cg).replace(str(CGROUP), ''):<52} {state}")
+
+    ok = True
+    target = app_slice(uid)
+    print("\nslices")
+    for cg in (target, target.parent / "session.slice"):
+        if not cg.is_dir():
+            print(f"  {cg.name:<18} absent")
+            continue
+        cur = read_regions(cg, "dmem.current")
+        mx = read_regions(cg, "dmem.max")
+        for region in capacity:
+            limit = mx.get(region, "unaccounted")
+            shown = limit if limit in ("max", "unaccounted") else gib(int(limit))
+            print(f"  {cg.name:<18} used {gib(int(cur.get(region, 0))):>10}   max {shown}")
+            if cg == target and limit in ("max", "unaccounted"):
+                ok = False
+
+    print("\nBAR1 (the window the CPU reaches VRAM through)")
+    for line in bar1_state():
+        print(f"  {line}")
+    return 0 if ok else 1
+
+
+def bar1_state() -> list[str]:
+    out = []
+    try:
+        params = pathlib.Path("/proc/driver/nvidia/params").read_text()
+        rebar = [l for l in params.split("\n") if l.startswith("EnableResizableBar")]
+        out += [f"driver      {rebar[0] if rebar else 'EnableResizableBar: unknown'}"]
+    except OSError:
+        return ["driver      nvidia not loaded"]
+    try:
+        lspci = subprocess.run(
+            ["lspci", "-vv"], capture_output=True, text=True, timeout=10
+        ).stdout
+        for line in lspci.split("\n"):
+            if "BAR 1: current size" in line:
+                out.append(f"hardware    {line.strip()}")
+                break
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return out
+
+
+def cmd_verify(args) -> int:
+    """Prove the driver charges the cgroup, and that a parent cap binds a child.
+
+    The second case is the one the design rests on: applications sit in slices
+    below app.slice, so a cap set on app.slice has to reach them.
+    """
+    probe = pathlib.Path(__file__).resolve().parent / "vram-probe.py"
+    scratch = CGROUP / "vram-guard-verify"
+    leaf = scratch / "leaf"
+    capacity = regions("dmem.capacity")
+    if not capacity:
+        print("FAIL no dmem regions registered")
+        return 1
+
+    scratch.mkdir(exist_ok=True)
+    (scratch / "cgroup.subtree_control").write_text("+dmem")
+    leaf.mkdir(exist_ok=True)
+
+    def cap(cg: pathlib.Path, value) -> None:
+        for region in capacity:
+            (cg / "dmem.max").write_text(f"{region} {value}")
+
+    try:
+        cases = [
+            (args.cap, leaf, "cap on the cgroup itself"),
+            (args.cap * 2, leaf, "cap on the cgroup itself"),
+            (args.cap, scratch, "cap inherited from the parent"),
+        ]
+        for cap_bytes, where, what in cases:
+            cap(scratch, "max")
+            cap(leaf, "max")
+            cap(where, cap_bytes)
+            run = subprocess.run(
+                ["bash", "-c", f'echo $$ > {leaf}/cgroup.procs && exec python3 {probe} {args.ceiling}'],
+                capture_output=True, text=True, timeout=600,
+            )
+            told = run.stdout.strip().splitlines() or [run.stderr.strip()]
+            print(f"{what:<30} cap {gib(cap_bytes):>9}  ->  {told[-1]}")
+            if run.returncode != 0:
+                print("FAIL allocation was not refused at the cap")
+                return 1
+    finally:
+        leaf.rmdir()
+        scratch.rmdir()
+    print("PASS the cap refuses the caller that crosses it, at any depth")
+    return 0
+
+
+def cmd_install(args) -> int:
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    if args.uninstall:
+        for f in (DROPIN, MODPROBE):
+            f.unlink(missing_ok=True)
+            print(f"removed {f}")
+        subprocess.run(["systemctl", "daemon-reload"], check=False)
+        print("run mkinitcpio -P, then reboot, to drop the Resizable BAR setting")
+        return 0
+
+    DROPIN.parent.mkdir(parents=True, exist_ok=True)
+    DROPIN.write_text(
+        "# Installed by rig-telemetry tools/vram-guard. See docs/vram.md.\n"
+        "# '+' runs it as root: user@.service otherwise drops to the user, who\n"
+        "# cannot write dmem.max.\n"
+        "[Service]\n"
+        "# '-' keeps a missing or broken guard from failing the unit, which would\n"
+        "# leave the user unable to log in.\n"
+        f"ExecStartPost=+-{repo}/tools/vram-guard apply %i --reserve {args.reserve}\n"
+    )
+    print(f"wrote {DROPIN}")
+
+    if args.resizable_bar:
+        MODPROBE.write_text(
+            "# Installed by rig-telemetry tools/vram-guard. See docs/vram.md.\n"
+            "# Without this BAR1 stays at 256 MiB and exhausts before the frame\n"
+            "# buffer does. Remove this file and rebuild the initramfs to revert.\n"
+            "options nvidia NVreg_EnableResizableBar=1\n"
+        )
+        print(f"wrote {MODPROBE}")
+        subprocess.run(["mkinitcpio", "-P"], check=False)
+
+    subprocess.run(["systemctl", "daemon-reload"], check=False)
+    print(f"\nthe drop-in runs at the next login. For the session already running:")
+    print(f"  sudo {repo}/tools/vram-guard apply {args.uid}")
+    print("Resizable BAR needs a reboot.")
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p.add_argument("--uid", type=int, default=1000, help="user whose slices to act on")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("status", help="what is delegated, what is capped, what BAR1 is")
+    s.set_defaults(fn=cmd_status)
+
+    a = sub.add_parser("apply", help="delegate dmem and cap app.slice (runs from the unit)")
+    a.add_argument("uid_pos", type=int, nargs="?", help="uid, as passed by %%i")
+    a.add_argument("--reserve", type=int, default=DEFAULT_RESERVE)
+    a.set_defaults(fn=cmd_apply)
+
+    v = sub.add_parser("verify", help="prove the driver charges the cgroup and honours the cap")
+    v.add_argument("--cap", type=int, default=1 << 30)
+    v.add_argument("--ceiling", type=int, default=6 << 30, help="how far to allocate uncapped")
+    v.set_defaults(fn=cmd_verify)
+
+    i = sub.add_parser("install", help="install the boot-time unit drop-in")
+    i.add_argument("--reserve", type=int, default=DEFAULT_RESERVE)
+    i.add_argument("--no-resizable-bar", dest="resizable_bar", action="store_false")
+    i.add_argument("--uninstall", action="store_true")
+    i.set_defaults(fn=cmd_install)
+
+    args = p.parse_args()
+    if getattr(args, "uid_pos", None) is not None:
+        args.uid = args.uid_pos
+    if args.cmd in ("apply", "install", "verify") and os.geteuid() != 0:
+        print(f"needs root: sudo {sys.argv[0]} {args.cmd}", file=sys.stderr)
+        return 1
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

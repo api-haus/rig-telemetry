@@ -54,6 +54,17 @@ tools/gen-dashboards.py --check # exits 1 if the committed JSON is stale
 Dashboards edited in the Grafana UI are not saved back to the repo. To keep a
 UI change, port it into the generator.
 
+## The VRAM cap
+
+```
+tools/vram-guard status         # exits 1 if app.slice carries no cap
+sudo tools/vram-guard verify    # re-prove enforcement after a driver upgrade
+```
+
+Check `status` after a kernel or NVIDIA upgrade. The cap depends on the driver
+charging the cgroup, which is a driver feature, not a kernel guarantee.
+`docs/vram.md` explains the mechanism and its limits.
+
 ## Storage
 
 2 year retention, capped at 30 GB, whichever comes first.

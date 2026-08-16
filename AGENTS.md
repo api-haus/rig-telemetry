@@ -35,6 +35,10 @@ Every command takes `--json` for parsing and `--at <RFC3339>` to evaluate at a
 past instant. `rig who` and `rig timeline` take `--since` to aggregate over a
 window.
 
+One tool sits outside `rig` because it acts instead of reporting:
+`tools/vram-guard` caps GPU memory per cgroup, so a client that fills the card
+is refused instead of the compositor. `docs/vram.md`.
+
 Dimensions for `--by`: `cpu`, `blocked`, `running`, `mem`, `rss`, `swap`, `io`,
 `read`, `write`, `faults`, `procs`, `threads`, `fds`, `switches`.
 
@@ -174,10 +178,13 @@ tools/rig                     the CLI above
 tools/gen-dashboards.py       dashboard generator; --check verifies freshness
 tools/harness_usage.py        one reader per AI harness, and the price lookup
 tools/harness-exporter.py     serves that to Prometheus on :13360
+tools/vram-guard              the VRAM cap: install, apply, status, verify
+tools/vram-probe.py           allocates VRAM until refused; used by verify
 share/prices.tsv              model names that reach no models.dev entry
 docs/metrics.md               every series, explained
 docs/ai-usage.md              harness readers, token conventions, pricing rules
 docs/thermals.md              how dust detection works and when it lies
+docs/vram.md                  why the GPU had no arbitration, and where the cap sits
 docs/runbook.md               operations
 ```
 
