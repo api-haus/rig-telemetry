@@ -102,10 +102,12 @@ rig:net:unattributed_bytes_per_sec
 Only sockets bound to the uplink's own addresses count towards it, so a
 container bridge cannot pad the figure.
 
-**This ratio never reaches 1.0.** The interface counts packet headers and
-retransmissions; a socket counts payload. A bulk transfer with every owner
-known reads about 0.95, and the rest is the frames themselves. Read 0.9 as
-"everything is named" and 0.4 as "most of this link is QUIC".
+**This ratio never reaches 1.0, and it only means anything under load.** The
+interface counts packet headers and retransmissions; a socket counts payload.
+A bulk transfer with every owner known reads about 0.95. On a quiet link the
+traffic is acknowledgements and keepalives, whose headers outweigh their
+payload, and the same healthy machine reads 0.4. Judge it while the line is
+busy — which is what `RigNetBlindToUdp` does before it fires.
 
 Below 0.6 with conntrack accounting off, `RigNetBlindToUdp` fires and names the
 sysctl above.

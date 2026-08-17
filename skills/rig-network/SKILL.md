@@ -77,8 +77,12 @@ counters:
 rig q 'rig:net:attributed_ratio'   # share of link bytes with a named owner
 ```
 
-Below about 0.8, say so in the same sentence as the top talker. A confident
-name over a 50% blind spot is a wrong answer with a number on it.
+Read it under load only. The interface counts packet headers and a socket
+counts payload, so a fully named bulk transfer reads about 0.95 and a quiet
+link reads far less without anything being wrong. While the line is busy, below
+about 0.8 means a real blind spot — say so in the same sentence as the top
+talker. A confident name over a 50% blind spot is a wrong answer with a number
+on it.
 
 ## Radio, line, or ISP
 
