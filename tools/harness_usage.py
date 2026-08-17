@@ -494,6 +494,11 @@ class Source:
     name = "?"
     home_hint = ""
     rescan = False
+    # Two sources can own one file — opencode and opencode2 both read
+    # opencode.db, but different tables in it. The `files` table keys by
+    # path, so a source that shares a path with another appends this to the
+    # ledger key to keep its own offset.
+    ledger_suffix = ""
 
     def files(self) -> list[pathlib.Path]:
         return []
@@ -788,6 +793,11 @@ class OpenCode(Source):
     Both are read and the message id deduplicates the overlap. It is one of
     three harnesses here that record what they think a turn cost, which is kept
     beside the recomputed figure rather than instead of it.
+
+    The fork this machine now runs keeps the same messages in a second table,
+    `session_message`, keyed by the same message id. Its data shape is the v2
+    one — `model` is an object and the fields are flat — so it is read through
+    the same path but only the rows that exist in no v1 store.
     """
     name = "opencode"
     home_hint = ".local/share/opencode"
@@ -837,7 +847,8 @@ class OpenCode(Source):
         db.close()
         return newest
 
-    def _rec(self, obj) -> Rec | None:
+    @staticmethod
+    def _rec(obj) -> Rec | None:
         if obj.get("role") != "assistant":
             return None
         tok = obj.get("tokens") or {}
@@ -846,21 +857,104 @@ class OpenCode(Source):
             sum(int(cache.get(k) or 0) for k in ("read", "write"))
         if not total:
             return None
+        # OpenCode's reasoning count is disjoint from its output count — it
+        # prices both together at the output rate, which its own `cost` field
+        # confirms. Folding reasoning into output keeps one token priced once
+        # and still reported under its own role.
+        reasoning = int(tok.get("reasoning") or 0)
         return Rec(
             ts=float((obj.get("time") or {}).get("created", 0)) / 1000 or time.time(),
-            harness=self.name,
+            harness="opencode",
             model=obj.get("modelID") or "",
-            project=self._project((obj.get("path") or {}).get("root")),
+            project=Source._project((obj.get("path") or {}).get("root")),
             kind="subagent" if obj.get("parentID") and obj.get("agent") not in (None, "build") else "main",
             provider=obj.get("providerID") or "",
             input=int(tok.get("input") or 0),
-            output=int(tok.get("output") or 0),
+            output=int(tok.get("output") or 0) + reasoning,
             cache_read=int(cache.get("read") or 0),
             cache_write=int(cache.get("write") or 0),
-            reasoning=int(tok.get("reasoning") or 0),
+            reasoning=reasoning,
             reported_cost=float(obj.get("cost") or 0) or None,
             uid=str(obj.get("id")),
         )
+
+
+class OpenCode2(Source):
+    """The OpenCode 2.0 fork (anomalyco/opencode) reads and writes the same
+    `~/.local/share/opencode/opencode.db` as v1, but it is a Go binary with a
+    different schema. It keeps messages in `session_message`, keyed by session,
+    with the usage in the same exclusive shape as v1 — `tokens.input`,
+    `tokens.output`, `tokens.cache.read/write`, `tokens.reasoning` — but with
+    `model` as an object and no `role` field. The session's `version` column
+    names the fork that wrote it (`0.0.0-*`), so the fork is told apart from
+    the id, not guessed. Only assistant messages that no v1 table holds are
+    read, so nothing is counted twice.
+
+    The working directory and the delegation kind are session attributes, so
+    they are read from `session_v2` rather than from each message.
+    """
+    name = "opencode2"
+    home_hint = ".local/share/opencode"
+    # Shares opencode.db with OpenCode, each reading a different table.
+    ledger_suffix = "2"
+
+    def files(self):
+        db = HOME / ".local" / "share" / "opencode" / "opencode.db"
+        return [db] if db.is_file() else []
+
+    def parse(self, path, offset, ctx):
+        try:
+            db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=15)
+            # v1 keeps its messages in `message`; the OpenCode source reads those.
+            # This fork writes to `session_message`, so only the rows v1 did not
+            # also put in `message` are read — otherwise the same response would
+            # count once under each harness.
+            rows = db.execute(
+                "SELECT m.id, m.time_created, m.data, "
+                "v.directory, v.agent, (v.parent_id IS NOT NULL AND v.parent_id != '') "
+                "FROM session_message m "
+                "JOIN session_v2 v ON v.id = m.session_id "
+                "WHERE m.type = 'assistant' AND m.time_created > ? "
+                "AND NOT EXISTS (SELECT 1 FROM message x WHERE x.id = m.id) "
+                "ORDER BY m.time_created", (offset,)).fetchall()
+        except sqlite3.Error:
+            return offset
+        newest = offset
+        for mid, created, data, directory, agent, delegated in rows:
+            newest = max(newest, int(created or 0))
+            try:
+                obj = json.loads(data)
+            except ValueError:
+                continue
+            tok = obj.get("tokens")
+            if not isinstance(tok, dict):
+                continue
+            cache = tok.get("cache") or {}
+            model = obj.get("model") or {}
+            if isinstance(model, str):
+                model_id, provider = model, ""
+            else:
+                model_id, provider = model.get("id") or "", model.get("providerID") or ""
+            if not model_id or not isinstance(tok.get("input"), int):
+                continue
+            reasoning = int(tok.get("reasoning") or 0)
+            yield Rec(
+                ts=float((obj.get("time") or {}).get("created", 0)) / 1000 or time.time(),
+                harness=self.name,
+                model=model_id,
+                project=Source._project(directory),
+                kind="subagent" if delegated and agent not in (None, "build") else "main",
+                provider=provider,
+                input=int(tok.get("input") or 0),
+                output=int(tok.get("output") or 0) + reasoning,
+                cache_read=int(cache.get("read") or 0),
+                cache_write=int(cache.get("write") or 0),
+                reasoning=reasoning,
+                reported_cost=float(obj.get("cost") or 0) or None,
+                uid=str(mid),
+            )
+        db.close()
+        return newest
 
 
 class Pi(Source):
@@ -1205,7 +1299,7 @@ def _live_sessions(harness, paths, extract, max_age=900):
 
 
 SOURCES: list[type[Source]] = [
-    ClaudeCode, Codex, KimiCode, OpenCode, Pi, Qwen, Dsh,
+    ClaudeCode, Codex, KimiCode, OpenCode, OpenCode2, Pi, Qwen, Dsh,
     GeminiCli, Goose, Crush, CopilotCli, Droid,
 ]
 
@@ -1264,7 +1358,7 @@ def _scan_file(db, prices, src: Source, path: pathlib.Path) -> int:
 
 
 def _scan_locked(db, prices, src: Source, path: pathlib.Path) -> int:
-    key = ledger_key(path)
+    key = ledger_key(path) + (src.ledger_suffix or "")
     stat = path.stat()
     row = db.execute("SELECT size, mtime, offset, ctx FROM files WHERE path = ?", (key,)).fetchone()
     offset = int(row["offset"]) if row else 0

@@ -43,3 +43,15 @@ deepseek-v4-pro	0.66 0.022 0.66 1.98 from 2026-08-16T16:00Z on deepseek
 deepseek-v4-pro	1.32 0.044 1.32 3.96 from 2026-08-16T16:00Z at 01-04,06-10 on deepseek
 deepseek-v4-flash	0.22 0.007 0.22 0.66 from 2026-08-16T16:00Z on deepseek
 deepseek-v4-flash	0.44 0.014 0.44 1.32 from 2026-08-16T16:00Z at 01-04,06-10 on deepseek
+
+# OpenRouter passes DeepSeek's own peak/off-peak clock straight through for the
+# 0813 build, so the same clock the `on deepseek` lines carry is repeated here
+# scoped to openrouter. models.dev still lists the pre-cutover 0.435/0.87, which
+# is wrong for anything after 2026-08-16T16:00Z.
+deepseek/deepseek-v4-pro-0813	0.66 0.022 0.66 1.98 from 2026-08-16T16:00Z on openrouter
+deepseek/deepseek-v4-pro-0813	1.32 0.044 1.32 3.96 from 2026-08-16T16:00Z at 01-04,06-10 on openrouter
+
+# Qwen3.8 27B shipped 2026-08-14, after the models.dev snapshot this stack
+# prices from, so no catalogue entry reaches it. OpenRouter's list rate:
+# https://openrouter.ai/qwen/qwen3.8-27b
+qwen/qwen3.8-27b	0.45 0.05 0.45 3.2 on openrouter

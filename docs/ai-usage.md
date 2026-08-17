@@ -66,6 +66,7 @@ installed into any harness and no configuration is changed.
 | Codex | `~/.codex/sessions/**/*.jsonl` | OpenAI: cached is inside input |
 | Kimi Code | `~/.kimi-code/sessions/**/wire.jsonl` | exclusive, one wire per agent |
 | OpenCode | `storage/message/**/*.json` and `opencode.db` | exclusive; reports its own cost |
+| OpenCode 2 | `opencode.db` `session_message` table | exclusive; fork of OpenCode, same db |
 | pi | `~/.pi/agent/sessions/**/*.jsonl` | exclusive; reports its own cost |
 | Qwen Code | `~/.qwen/usage_record.jsonl` | Gemini: cached inside prompt, thoughts inside output |
 | dsh | `~/.dsh/sessions/**/session.jsonl.zstd` | exclusive; compressed, one zstd frame per append |
@@ -86,12 +87,20 @@ Every reader converts to one **exclusive** form before anything else happens:
 
 - `input` never includes cached tokens.
 - `cache_read` and `cache_write` are separate roles with separate rates.
-- `reasoning` is always already inside `output`. It is reported so you can see
+- `reasoning` is already inside `output`. It is reported so you can see
   how much of a reply was thinking, and it is never priced, because pricing it
   again would bill the same tokens twice.
 
 Anthropic already reports this shape. OpenAI and Google nest the cached count
 inside the prompt count, so the reader subtracts it out.
+
+OpenCode is the exception that proves the rule. Its `reasoning` count is
+*disjoint* from its `output` count — a reply's `total` is input plus output
+plus reasoning plus cache — and its own `cost` field prices `output + reasoning`
+together at the output rate. So the OpenCode readers fold reasoning into output
+when they record it, and the same token is still billed once. This is why
+`rig ai doctor`'s list-vs-reported comparison for OpenCode lands near 1.00x
+rather than short by the whole reasoning share on a reasoning model.
 
 DeepSeek publishes no cache-write rate because it charges a cache miss at the
 plain input rate, so `dsh` records no such role and none is invented for it.
