@@ -1,26 +1,25 @@
 {
-  "uid": "rig-ai",
-  "title": "Rig \u2014 AI Spend",
-  "description": "What every AI coding harness on this machine used, priced at published API list rates. Money, tokens, models, projects, and the delegated share. The dropdowns narrow every panel to one harness, provider or model.",
+  "uid": "rig-network",
+  "title": "Rig \u2014 Network",
+  "description": "Who is using the link, where it goes, and whether it is full. The queue panels answer the question throughput cannot: why everything lags while a download sits under its own speed cap.",
   "tags": [
     "rig",
-    "ai",
-    "cost"
+    "network"
   ],
   "timezone": "browser",
   "editable": true,
   "schemaVersion": 39,
   "version": 1,
-  "refresh": "1m",
+  "refresh": "15s",
   "time": {
-    "from": "now-7d",
+    "from": "now-3h",
     "to": "now"
   },
   "graphTooltip": 1,
   "panels": [
     {
       "type": "row",
-      "title": "API list value",
+      "title": "Verdict",
       "collapsed": false,
       "id": 1,
       "panels": [],
@@ -33,8 +32,8 @@
     },
     {
       "type": "stat",
-      "title": "All recorded",
-      "description": "Every dollar here is API list value: what these tokens would cost billed through the provider's API. A subscription pays a flat fee instead, so this is the value received rather than money leaving the account. Counts every session file still on disk.",
+      "title": "Down",
+      "description": "The default-route interface alone. Container bridges, VMs and the tailnet carry bytes that never reach the ISP.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -42,7 +41,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"})",
+          "expr": "rig:net:link:rx_bits_per_sec",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -54,8 +53,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
-          "decimals": 0,
+          "unit": "bps",
+          "decimals": null,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -89,7 +88,7 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 3,
         "x": 0,
         "y": 1
       },
@@ -97,7 +96,7 @@
     },
     {
       "type": "stat",
-      "title": "Last 24h",
+      "title": "Up",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -106,7 +105,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[24h]))",
+          "expr": "rig:net:link:tx_bits_per_sec",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -118,8 +117,72 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
-          "decimals": 0,
+          "unit": "bps",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 32
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 3,
+        "y": 1
+      },
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Of the line",
+      "description": "Downlink against RIG_NET_DOWN_MBIT.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:link:rx_saturation",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": null,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -129,21 +192,22 @@
               },
               {
                 "color": "yellow",
-                "value": 50
+                "value": 0.6
               },
               {
                 "color": "orange",
-                "value": 200
+                "value": 0.85
               },
               {
                 "color": "red",
-                "value": 500
+                "value": 0.95
               }
             ]
           },
           "color": {
             "mode": "thresholds"
-          }
+          },
+          "noValue": "No line speed set. RIG_NET_DOWN_MBIT in .env, then this reads against what you pay for instead of against the busiest minute so far."
         },
         "overrides": []
       },
@@ -166,79 +230,15 @@
       "gridPos": {
         "h": 4,
         "w": 3,
-        "x": 4,
-        "y": 1
-      },
-      "id": 3
-    },
-    {
-      "type": "stat",
-      "title": "Last 7 days",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[7d]))",
-          "legendFormat": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "graphMode": "area",
-        "colorMode": "value",
-        "justifyMode": "auto",
-        "textMode": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "text": {
-          "valueSize": 32
-        }
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 3,
-        "x": 7,
+        "x": 6,
         "y": 1
       },
       "id": 4
     },
     {
       "type": "stat",
-      "title": "Burn rate",
-      "description": "Dollars of list value per hour, averaged over the last hour.",
+      "title": "Of its own best",
+      "description": "Against the fastest this line has been seen to go in 7 days. The stand-in while nobody has typed in what it was sold as.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -246,7 +246,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[1h])) * 3600",
+          "expr": "rig:net:link:rx_share_of_peak",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -258,7 +258,79 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
+          "unit": "percentunit",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.6
+              },
+              {
+                "color": "orange",
+                "value": 0.85
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 32
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 9,
+        "y": 1
+      },
+      "id": 5
+    },
+    {
+      "type": "stat",
+      "title": "Queue",
+      "description": "A link is never slow, it is full. When it is full the bytes still arrive at the same rate and every interactive packet waits behind them, so the honest measure of 'the internet is laggy' is round-trip time against its own idle value, not throughput. 1.0 is an idle path. Above 4 the lag is real and it is not the download rate that caused it.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(rig:net:bufferbloat_ratio{kind=\"internet\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
           "decimals": 1,
           "thresholds": {
             "mode": "absolute",
@@ -269,15 +341,15 @@
               },
               {
                 "color": "yellow",
-                "value": 10
+                "value": 2
               },
               {
                 "color": "orange",
-                "value": 40
+                "value": 4
               },
               {
                 "color": "red",
-                "value": 100
+                "value": 10
               }
             ]
           },
@@ -306,15 +378,15 @@
       "gridPos": {
         "h": 4,
         "w": 3,
-        "x": 10,
+        "x": 12,
         "y": 1
       },
-      "id": 5
+      "id": 6
     },
     {
       "type": "stat",
-      "title": "Per million tokens",
-      "description": "Blended over every role. Rises when caches lapse and windows get rewritten.",
+      "title": "Round trip",
+      "description": "",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -322,7 +394,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}) / clamp_min(sum(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\",role!=\"reasoning\"}) / 1e6, 1e-9)",
+          "expr": "max(rig:net:rtt_seconds{kind=\"internet\"})",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -334,14 +406,26 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
-          "decimals": 2,
+          "unit": "s",
+          "decimals": null,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.06
+              },
+              {
+                "color": "orange",
+                "value": 0.15
+              },
+              {
+                "color": "red",
+                "value": 0.4
               }
             ]
           },
@@ -370,15 +454,15 @@
       "gridPos": {
         "h": 4,
         "w": 3,
-        "x": 13,
+        "x": 15,
         "y": 1
       },
-      "id": 6
+      "id": 7
     },
     {
       "type": "stat",
-      "title": "Context re-read",
-      "description": "Share of input-side tokens that are cache reads \u2014 the window being re-sent. A cache read is billed at about a tenth of a fresh input token, so high is cheap: the red end is a session paying full price to say the same thing again.",
+      "title": "Loss",
+      "description": "Echoes that never came back. To the gateway it is the radio or the cable; only past it is it the ISP.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -386,7 +470,79 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\",role=\"cache_read\"}) / clamp_min(sum(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\",role=~\"input|cache_read|cache_write\"}), 1)",
+          "expr": "max(rig:net:loss_ratio)",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.01
+              },
+              {
+                "color": "orange",
+                "value": 0.05
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 32
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 18,
+        "y": 1
+      },
+      "id": 8
+    },
+    {
+      "type": "stat",
+      "title": "Named owner",
+      "description": "Share of the link's bytes this stack can attribute to a process group. The rest is UDP without conntrack accounting, and connections too short to be sampled. `rig net doctor` says which.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:attributed_ratio",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -413,7 +569,7 @@
               },
               {
                 "color": "yellow",
-                "value": 0.75
+                "value": 0.8
               },
               {
                 "color": "green",
@@ -446,134 +602,6 @@
       "gridPos": {
         "h": 4,
         "w": 3,
-        "x": 16,
-        "y": 1
-      },
-      "id": 7
-    },
-    {
-      "type": "stat",
-      "title": "Live sessions",
-      "description": "Harness sessions whose state file moved in the last few minutes.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(aiusage_sessions_live{harness=~\"$harness\"})",
-          "legendFormat": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": null,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "graphMode": "area",
-        "colorMode": "value",
-        "justifyMode": "auto",
-        "textMode": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "text": {
-          "valueSize": 32
-        }
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 2,
-        "x": 19,
-        "y": 1
-      },
-      "id": 8
-    },
-    {
-      "type": "stat",
-      "title": "Harnesses seen",
-      "description": "Harnesses with session files on this machine. `rig ai doctor` lists all of them.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "count(aiusage_source_files{harness=~\"$harness\"} > 0)",
-          "legendFormat": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": null,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "graphMode": "none",
-        "colorMode": "value",
-        "justifyMode": "auto",
-        "textMode": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "text": {
-          "valueSize": 32
-        }
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 3,
         "x": 21,
         "y": 1
       },
@@ -581,7 +609,7 @@
     },
     {
       "type": "row",
-      "title": "Where the money goes",
+      "title": "Who is using it",
       "collapsed": false,
       "id": 10,
       "panels": [],
@@ -594,8 +622,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Spend by token role",
-      "description": "cache_read is normally the largest by far: a running context is re-sent on every request, so cost is context size times request count. cache_write spikes when a prompt cache lapses and the whole window is paid for again.",
+      "title": "Down, by process group",
+      "description": "Internet only, and named by the same groups as every other dashboard. Defined in process-exporter/config.yml.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -603,8 +631,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (role) (increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[$__rate_interval]))",
-          "legendFormat": "{{role}}",
+          "expr": "topk(8, rig:net:proc:uplink_rx_bytes_per_sec)",
+          "legendFormat": "{{groupname}}",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"
@@ -615,7 +643,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
+          "unit": "Bps",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -659,10 +687,9 @@
           "sort": "desc"
         }
       },
-      "interval": "5m",
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
         "y": 6
       },
@@ -670,8 +697,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Spend by harness",
-      "description": "",
+      "title": "Up, by process group",
+      "description": "The uplink is usually the smaller pipe, and filling it queues the acknowledgements every download depends on. A backup or a sync client here slows a machine that is downloading nothing.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -679,8 +706,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (harness) (increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[$__rate_interval]))",
-          "legendFormat": "{{harness}}",
+          "expr": "topk(8, rig:net:proc:uplink_tx_bytes_per_sec)",
+          "legendFormat": "{{groupname}}",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"
@@ -691,7 +718,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
+          "unit": "Bps",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -735,19 +762,18 @@
           "sort": "desc"
         }
       },
-      "interval": "5m",
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
+        "w": 12,
+        "x": 12,
         "y": 6
       },
       "id": 12
     },
     {
       "type": "timeseries",
-      "title": "Spend by model",
-      "description": "The eight dearest in the window. A model is summed across whichever provider served it, so the Provider dropdown is what separates the same model bought from two sellers.",
+      "title": "Link against what has an owner",
+      "description": "The gap is UDP with no conntrack accounting plus connections that opened and closed between two samples. Measured, not assumed.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -755,8 +781,19 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(8, sum by (model) (increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[$__rate_interval])))",
-          "legendFormat": "{{model}}",
+          "expr": "rate(rignet_link_bytes_total[5m])",
+          "legendFormat": "the interface counted",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "rate(rignet_attributed_bytes_total[5m])",
+          "legendFormat": "attributed to a group",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"
@@ -767,20 +804,16 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
+          "unit": "Bps",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
-            "fillOpacity": 40,
+            "fillOpacity": 0,
             "gradientMode": "opacity",
             "showPoints": "never",
             "spanNulls": true,
             "axisSoftMin": null,
-            "axisSoftMax": null,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            }
+            "axisSoftMax": null
           },
           "thresholds": {
             "mode": "absolute",
@@ -811,19 +844,18 @@
           "sort": "desc"
         }
       },
-      "interval": "5m",
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 6
+        "w": 12,
+        "x": 0,
+        "y": 14
       },
       "id": 13
     },
     {
       "type": "bargauge",
-      "title": "Total by project",
-      "description": "Cumulative list value per project directory, all recorded history.",
+      "title": "Total by process group",
+      "description": "Everything recorded, per group. A cumulative counter, so this is the whole history the exporter has watched.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -831,7 +863,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(15, sum by (project) (aiusage_project_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}))",
+          "expr": "topk(12, sum by (groupname) (rignet_proc_received_bytes_total{scope=\"internet\"}) + sum by (groupname) (rignet_proc_sent_bytes_total{scope=\"internet\"}))",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -873,7 +905,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
+          "unit": "bytes",
           "decimals": 0,
           "color": {
             "mode": "continuous-BlPu"
@@ -905,199 +937,17 @@
       },
       "gridPos": {
         "h": 9,
-        "w": 8,
-        "x": 0,
+        "w": 12,
+        "x": 12,
         "y": 14
       },
       "id": 14
     },
     {
-      "type": "bargauge",
-      "title": "Total by model",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "topk(12, sum by (model) (aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}))",
-          "legendFormat": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": false,
-          "format": "table",
-          "instant": true
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "__name__": true,
-              "instance": true,
-              "job": true,
-              "host": true
-            },
-            "renameByName": {},
-            "indexByName": {}
-          }
-        },
-        {
-          "id": "sortBy",
-          "options": {
-            "fields": {},
-            "sort": [
-              {
-                "field": "Value",
-                "desc": true
-              }
-            ]
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD",
-          "decimals": 0,
-          "color": {
-            "mode": "continuous-BlPu"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "displayMode": "gradient",
-        "orientation": "horizontal",
-        "showUnfilled": true,
-        "valueMode": "color",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": true
-        }
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 8,
-        "x": 8,
-        "y": 14
-      },
-      "id": 15
-    },
-    {
-      "type": "bargauge",
-      "title": "Total by role",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (role) (aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"})",
-          "legendFormat": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": false,
-          "format": "table",
-          "instant": true
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "__name__": true,
-              "instance": true,
-              "job": true,
-              "host": true
-            },
-            "renameByName": {},
-            "indexByName": {}
-          }
-        },
-        {
-          "id": "sortBy",
-          "options": {
-            "fields": {},
-            "sort": [
-              {
-                "field": "Value",
-                "desc": true
-              }
-            ]
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD",
-          "decimals": 0,
-          "color": {
-            "mode": "continuous-BlPu"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "displayMode": "gradient",
-        "orientation": "horizontal",
-        "showUnfilled": true,
-        "valueMode": "color",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": true
-        }
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 8,
-        "x": 16,
-        "y": 14
-      },
-      "id": 16
-    },
-    {
       "type": "row",
-      "title": "Who did the work",
+      "title": "Is it queued?",
       "collapsed": false,
-      "id": 17,
+      "id": 15,
       "panels": [],
       "gridPos": {
         "h": 1,
@@ -1108,8 +958,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Delegated versus direct",
-      "description": "Send enough work to subagents and most of the money stops being spent by the session you are watching.",
+      "title": "Round trip time against its own idle value",
+      "description": "A link is never slow, it is full. When it is full the bytes still arrive at the same rate and every interactive packet waits behind them, so the honest measure of 'the internet is laggy' is round-trip time against its own idle value, not throughput. The floor line is the best this path has answered in since the exporter started. Distance between the two lines is somebody else's queue.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -1117,696 +967,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (kind) (increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[$__rate_interval]))",
-          "legendFormat": "{{kind}}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 40,
-            "gradientMode": "opacity",
-            "showPoints": "never",
-            "spanNulls": true,
-            "axisSoftMin": null,
-            "axisSoftMax": null,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "min": null,
-          "max": null
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "last",
-            "max"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "interval": "5m",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 24
-      },
-      "id": 18
-    },
-    {
-      "type": "timeseries",
-      "title": "Spend by project",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "topk(8, sum by (project) (increase(aiusage_project_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[$__rate_interval])))",
-          "legendFormat": "{{project}}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 40,
-            "gradientMode": "opacity",
-            "showPoints": "never",
-            "spanNulls": true,
-            "axisSoftMin": null,
-            "axisSoftMax": null,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "min": null,
-          "max": null
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "last",
-            "max"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "interval": "5m",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 24
-      },
-      "id": 19
-    },
-    {
-      "type": "table",
-      "title": "Model detail",
-      "description": "Rates come from models.dev. `rig ai models` prints the per-million figures used.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (harness, provider, model) (aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"})",
-          "legendFormat": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true,
-          "format": "table",
-          "instant": true
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "__name__": true,
-              "instance": true,
-              "job": true,
-              "host": true
-            },
-            "renameByName": {
-              "Value": "list value"
-            },
-            "indexByName": {}
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD",
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true,
-        "sortBy": [
-          {
-            "displayName": "Value",
-            "desc": true
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 0,
-        "y": 32
-      },
-      "id": 20
-    },
-    {
-      "type": "table",
-      "title": "Harnesses on this machine",
-      "description": "Zero files means the harness is installed but has written nothing this reader understands. `rig ai doctor` says which.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "aiusage_source_files{harness=~\"$harness\"}",
-          "legendFormat": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true,
-          "format": "table",
-          "instant": true
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "__name__": true,
-              "instance": true,
-              "job": true,
-              "host": true
-            },
-            "renameByName": {
-              "Value": "session files"
-            },
-            "indexByName": {}
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true,
-        "sortBy": [
-          {
-            "displayName": "Value",
-            "desc": true
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 32
-      },
-      "id": 21
-    },
-    {
-      "type": "row",
-      "title": "Tokens",
-      "collapsed": false,
-      "id": 22,
-      "panels": [],
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 41
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Tokens per second by role",
-      "description": "reasoning is already inside output and is never priced twice.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (harness, role) (rate(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[15m]))",
-          "legendFormat": "{{harness}} {{role}}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 40,
-            "gradientMode": "opacity",
-            "showPoints": "never",
-            "spanNulls": true,
-            "axisSoftMin": null,
-            "axisSoftMax": null,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "min": null,
-          "max": null
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "last",
-            "max"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 42
-      },
-      "id": 23
-    },
-    {
-      "type": "timeseries",
-      "title": "API responses per hour",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (harness) (rate(aiusage_requests_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[1h])) * 3600",
-          "legendFormat": "{{harness}}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 40,
-            "gradientMode": "opacity",
-            "showPoints": "never",
-            "spanNulls": true,
-            "axisSoftMin": null,
-            "axisSoftMax": null,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "min": null,
-          "max": null
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "last",
-            "max"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 42
-      },
-      "id": 24
-    },
-    {
-      "type": "timeseries",
-      "title": "Context re-read share",
-      "description": "Climbs through a long session. The window grows and every request pays for all of it.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\",role=\"cache_read\"}) / clamp_min(sum(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\",role=~\"input|cache_read|cache_write\"}), 1)",
-          "legendFormat": "cache reads / input-side tokens",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "gradientMode": "opacity",
-            "showPoints": "never",
-            "spanNulls": true,
-            "axisSoftMin": null,
-            "axisSoftMax": 1
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "min": null,
-          "max": 1
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "last",
-            "max"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 50
-      },
-      "id": 25
-    },
-    {
-      "type": "timeseries",
-      "title": "Dollars per million tokens",
-      "description": "A step up means either a dearer model or a cache rebuild.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}) / clamp_min(sum(aiusage_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\",role!=\"reasoning\"}) / 1e6, 1e-9)",
-          "legendFormat": "blended",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "gradientMode": "opacity",
-            "showPoints": "never",
-            "spanNulls": true,
-            "axisSoftMin": null,
-            "axisSoftMax": null
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "min": null,
-          "max": null
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "last",
-            "max"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 50
-      },
-      "id": 26
-    },
-    {
-      "type": "row",
-      "title": "Subscription and coverage",
-      "collapsed": false,
-      "id": 27,
-      "panels": [],
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 58
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Subscription window used",
-      "description": "Read straight from the harness. It is the only figure on this dashboard that is about the plan rather than about list price.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "aiusage_rate_limit_used_ratio{harness=~\"$harness\"}",
-          "legendFormat": "{{harness}} {{window}} ({{plan}})",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "gradientMode": "opacity",
-            "showPoints": "never",
-            "spanNulls": true,
-            "axisSoftMin": null,
-            "axisSoftMax": 1
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "min": null,
-          "max": 1,
-          "noValue": "No harness here publishes its subscription window. Codex is the one that does."
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "last",
-            "max"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 59
-      },
-      "id": 28
-    },
-    {
-      "type": "timeseries",
-      "title": "List price against what the harness claims",
-      "description": "Only some harnesses report a cost at all, so the reported line covers part of the total. Where both exist the gap is the subsidy.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(aiusage_reported_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"})",
-          "legendFormat": "harness reported",
+          "expr": "rig:net:rtt_seconds",
+          "legendFormat": "{{target}} ({{kind}}) now",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"
@@ -1816,8 +978,8 @@
         },
         {
           "refId": "B",
-          "expr": "sum(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"})",
-          "legendFormat": "API list value",
+          "expr": "rig:net:rtt_floor_seconds",
+          "legendFormat": "{{target}} idle",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"
@@ -1828,7 +990,238 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "id": 16
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue factor",
+      "description": "Round trip over idle round trip. This is the panel to open when a download is capped and the machine still feels slow \u2014 the cap limits the rate, not the queue the router builds.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:bufferbloat_ratio",
+          "legendFormat": "{{target}} ({{kind}})",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "axisSoftMax": null,
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 4
+              }
+            ]
+          },
+          "min": 0,
+          "max": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "id": 17
+    },
+    {
+      "type": "timeseries",
+      "title": "Loss and retransmits",
+      "description": "TCP retransmits rise before ICMP loss does: a full queue drops the bulk flow's packets first, which is exactly the traffic nobody notices.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:loss_ratio",
+          "legendFormat": "{{target}} icmp loss",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "rig:net:retransmit_ratio",
+          "legendFormat": "tcp segments sent again",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "id": 18
+    },
+    {
+      "type": "timeseries",
+      "title": "Worst round trip per process group",
+      "description": "Taken from each group's own established connections, so a game and a download on the same link can be told apart. A game climbing here is the complaint, whatever the download is doing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(8, rig:net:proc:rtt_seconds)",
+          "legendFormat": "{{groupname}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -1872,82 +1265,27 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 59
+        "y": 32
       },
-      "id": 29
+      "id": 19
     },
     {
-      "type": "stat",
-      "title": "Tokens with no published price",
-      "description": "Excluded from every dollar figure here. A model nobody sells by the token gets no invented number.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(aiusage_unpriced_tokens_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"})",
-          "legendFormat": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": null,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "graphMode": "area",
-        "colorMode": "value",
-        "justifyMode": "auto",
-        "textMode": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "text": {
-          "valueSize": 32
-        }
-      },
+      "type": "row",
+      "title": "Where it goes",
+      "collapsed": false,
+      "id": 20,
+      "panels": [],
       "gridPos": {
-        "h": 4,
-        "w": 6,
+        "h": 1,
+        "w": 24,
         "x": 0,
-        "y": 67
-      },
-      "id": 30
+        "y": 40
+      }
     },
     {
-      "type": "stat",
-      "title": "Ledger age",
-      "description": "Since the exporter last read the session files.",
+      "type": "bargauge",
+      "title": "Down, by remote address",
+      "description": "Addresses beyond the busiest fold into `other`. `rig net peers` resolves names.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -1955,142 +1293,89 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rig:ai:scan_age_seconds",
+          "expr": "topk(12, rig:net:peer:rx_bytes_per_sec{scope=\"internet\"})",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"
           },
           "editorMode": "code",
-          "range": true
+          "range": false,
+          "format": "table",
+          "instant": true
         }
       ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "decimals": null,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 300
-              },
-              {
-                "color": "orange",
-                "value": 900
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "graphMode": "area",
-        "colorMode": "value",
-        "justifyMode": "auto",
-        "textMode": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "text": {
-          "valueSize": 32
-        }
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 67
-      },
-      "id": 31
-    },
-    {
-      "type": "stat",
-      "title": "Price catalogue age",
-      "description": "models.dev is refetched by the exporter on its own schedule.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "rig-prom"
-      },
-      "targets": [
+      "transformations": [
         {
-          "refId": "A",
-          "expr": "aiusage_prices_age_seconds",
-          "legendFormat": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "rig-prom"
-          },
-          "editorMode": "code",
-          "range": true
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "host": true
+            },
+            "renameByName": {},
+            "indexByName": {}
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
+          "unit": "Bps",
           "decimals": null,
+          "color": {
+            "mode": "continuous-BlPu"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "text",
                 "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 604800
-              },
-              {
-                "color": "orange",
-                "value": 2592000
               }
             ]
-          },
-          "color": {
-            "mode": "thresholds"
           }
         },
         "overrides": []
       },
       "options": {
-        "graphMode": "area",
-        "colorMode": "value",
-        "justifyMode": "auto",
-        "textMode": "auto",
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "valueMode": "color",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
           ],
           "fields": "",
-          "values": false
-        },
-        "text": {
-          "valueSize": 32
+          "values": true
         }
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 67
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 41
       },
-      "id": 32
+      "id": 21
     },
     {
-      "type": "stat",
-      "title": "Files tracked",
+      "type": "bargauge",
+      "title": "Up, by remote address",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -2099,8 +1384,565 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(aiusage_source_files{harness=~\"$harness\"})",
+          "expr": "topk(12, rig:net:peer:tx_bytes_per_sec{scope=\"internet\"})",
           "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": false,
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "host": true
+            },
+            "renameByName": {},
+            "indexByName": {}
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "decimals": null,
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        }
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 41
+      },
+      "id": 22
+    },
+    {
+      "type": "bargauge",
+      "title": "By service",
+      "description": "Named from the remote port. A number instead of a name means a port nobody has agreed on, which is normal for peer-to-peer and for games.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, rig:net:service_bytes_per_sec)",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": false,
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "host": true
+            },
+            "renameByName": {},
+            "indexByName": {}
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "decimals": null,
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        }
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 41
+      },
+      "id": 23
+    },
+    {
+      "type": "timeseries",
+      "title": "Traffic by service",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(8, rig:net:service_bytes_per_sec)",
+          "legendFormat": "{{service}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 40,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 50
+      },
+      "id": 24
+    },
+    {
+      "type": "table",
+      "title": "Busiest peers now",
+      "description": "Instant rate to each address. `rig net conns` has the per-connection detail, which is deliberately never a metric \u2014 one series per socket would cost more than the rest of this stack together.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, rig:net:peer:bytes_per_sec{scope=\"internet\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true,
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "host": true
+            },
+            "renameByName": {
+              "Value": "bytes/s"
+            },
+            "indexByName": {}
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Value",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false
+        }
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "id": 25
+    },
+    {
+      "type": "row",
+      "title": "The link itself",
+      "collapsed": false,
+      "id": 26,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 59
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Every interface, down",
+      "description": "Bridges and virtual interfaces included. Docker gives one bridge per compose project, so a busy line here that is not the default route never left the machine.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:rx_bytes_per_sec",
+          "legendFormat": "{{device}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 60
+      },
+      "id": 27
+    },
+    {
+      "type": "timeseries",
+      "title": "Every interface, up",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:tx_bytes_per_sec",
+          "legendFormat": "{{device}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 60
+      },
+      "id": 28
+    },
+    {
+      "type": "timeseries",
+      "title": "Wifi signal",
+      "description": "Above -60 dBm is strong, below -72 the radio steps down to slow rates and the link is the bottleneck before any queue is.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:wifi_signal_dbm",
+          "legendFormat": "{{device}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dBm",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": null,
+          "noValue": "No wireless interface \u2014 this machine is on a cable."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 68
+      },
+      "id": 29
+    },
+    {
+      "type": "timeseries",
+      "title": "Wifi retries",
+      "description": "Frames the radio had to send again. Airtime spent on nothing, and it rises long before throughput falls.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:wifi_retries_per_sec",
+          "legendFormat": "{{device}}",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"
@@ -2112,7 +1954,16 @@
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "decimals": null,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -2122,133 +1973,273 @@
               }
             ]
           },
-          "color": {
-            "mode": "thresholds"
-          }
+          "min": null,
+          "max": null,
+          "noValue": "No wireless interface."
         },
         "overrides": []
       },
       "options": {
-        "graphMode": "none",
-        "colorMode": "value",
-        "justifyMode": "auto",
-        "textMode": "auto",
-        "reduceOptions": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
           "calcs": [
-            "lastNotNull"
+            "last",
+            "max"
           ],
-          "fields": "",
-          "values": false
+          "showLegend": true
         },
-        "text": {
-          "valueSize": 32
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 67
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 68
+      },
+      "id": 30
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors and drops",
+      "description": "Drops on a virtual interface are ordinary. Drops on the default route are not.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:errors_per_sec",
+          "legendFormat": "{{device}} errors",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "rig:net:drops_per_sec",
+          "legendFormat": "{{device}} drops",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 68
+      },
+      "id": 31
+    },
+    {
+      "type": "timeseries",
+      "title": "Established connections",
+      "description": "A group holding hundreds of connections is either a peer-to-peer client or a download accelerator, and both defeat any single-connection rate cap.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:tcp_established",
+          "legendFormat": "machine total",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "topk(6, rig:net:proc:connections)",
+          "legendFormat": "{{groupname}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 76
+      },
+      "id": 32
+    },
+    {
+      "type": "timeseries",
+      "title": "Name resolution",
+      "description": "Time for a name to become an address, through the same path an application uses. Slow here with a quiet link is the resolver, not the line.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:resolver_seconds",
+          "legendFormat": "system resolver",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 76
       },
       "id": 33
     }
   ],
   "templating": {
-    "list": [
-      {
-        "name": "harness",
-        "label": "Harness",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "rig-prom"
-        },
-        "definition": "label_values(aiusage_cost_usd_total{},harness)",
-        "query": {
-          "qryType": 1,
-          "query": "label_values(aiusage_cost_usd_total{},harness)",
-          "refId": "PrometheusVariableQueryEditor-VariableQuery"
-        },
-        "current": {
-          "text": [
-            "All"
-          ],
-          "value": [
-            "$__all"
-          ]
-        },
-        "includeAll": true,
-        "allValue": ".*",
-        "multi": true,
-        "options": [],
-        "refresh": 1,
-        "regex": "",
-        "sort": 1,
-        "hide": 0
-      },
-      {
-        "name": "provider",
-        "label": "Provider",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "rig-prom"
-        },
-        "definition": "label_values(aiusage_cost_usd_total{harness=~\"$harness\"},provider)",
-        "query": {
-          "qryType": 1,
-          "query": "label_values(aiusage_cost_usd_total{harness=~\"$harness\"},provider)",
-          "refId": "PrometheusVariableQueryEditor-VariableQuery"
-        },
-        "current": {
-          "text": [
-            "All"
-          ],
-          "value": [
-            "$__all"
-          ]
-        },
-        "includeAll": true,
-        "allValue": ".*",
-        "multi": true,
-        "options": [],
-        "refresh": 1,
-        "regex": "",
-        "sort": 1,
-        "hide": 0
-      },
-      {
-        "name": "model",
-        "label": "Model",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "rig-prom"
-        },
-        "definition": "label_values(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\"},model)",
-        "query": {
-          "qryType": 1,
-          "query": "label_values(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\"},model)",
-          "refId": "PrometheusVariableQueryEditor-VariableQuery"
-        },
-        "current": {
-          "text": [
-            "All"
-          ],
-          "value": [
-            "$__all"
-          ]
-        },
-        "includeAll": true,
-        "allValue": ".*",
-        "multi": true,
-        "options": [],
-        "refresh": 1,
-        "regex": "",
-        "sort": 1,
-        "hide": 0
-      }
-    ]
+    "list": []
   },
   "annotations": {
     "list": [
@@ -2263,94 +2254,6 @@
         "enable": true,
         "hide": true,
         "iconColor": "rgba(0, 211, 255, 1)"
-      },
-      {
-        "name": "deepseek peak hours",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "rig-prom"
-        },
-        "enable": true,
-        "hide": false,
-        "iconColor": "rgba(255, 152, 0, 0.20)",
-        "expr": "vector(1) and (((hour() >= 1 and hour() < 4) or (hour() >= 6 and hour() < 10)) and (vector(time()) >= 1786896000))",
-        "step": "300s",
-        "target": {
-          "expr": "vector(1) and (((hour() >= 1 and hour() < 4) or (hour() >= 6 and hour() < 10)) and (vector(time()) >= 1786896000))",
-          "refId": "peak",
-          "interval": "300s",
-          "legendFormat": ""
-        },
-        "titleFormat": "deepseek peak hours",
-        "textFormat": "",
-        "tagKeys": "",
-        "useValueForTime": false
-      },
-      {
-        "name": "deepseek rate change",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "rig-prom"
-        },
-        "enable": true,
-        "hide": false,
-        "iconColor": "rgb(255, 152, 0)",
-        "expr": "vector(1) and (((hour() == 1 or hour() == 4 or hour() == 6 or hour() == 10) and minute() < 15) and (vector(time()) >= 1786896000))",
-        "step": "900s",
-        "target": {
-          "expr": "vector(1) and (((hour() == 1 or hour() == 4 or hour() == 6 or hour() == 10) and minute() < 15) and (vector(time()) >= 1786896000))",
-          "refId": "peak",
-          "interval": "900s",
-          "legendFormat": ""
-        },
-        "titleFormat": "deepseek rate change",
-        "textFormat": "",
-        "tagKeys": "",
-        "useValueForTime": false
-      },
-      {
-        "name": "openrouter peak hours",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "rig-prom"
-        },
-        "enable": true,
-        "hide": false,
-        "iconColor": "rgba(255, 152, 0, 0.20)",
-        "expr": "vector(1) and (((hour() >= 1 and hour() < 4) or (hour() >= 6 and hour() < 10)) and (vector(time()) >= 1786896000))",
-        "step": "300s",
-        "target": {
-          "expr": "vector(1) and (((hour() >= 1 and hour() < 4) or (hour() >= 6 and hour() < 10)) and (vector(time()) >= 1786896000))",
-          "refId": "peak",
-          "interval": "300s",
-          "legendFormat": ""
-        },
-        "titleFormat": "openrouter peak hours",
-        "textFormat": "",
-        "tagKeys": "",
-        "useValueForTime": false
-      },
-      {
-        "name": "openrouter rate change",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "rig-prom"
-        },
-        "enable": true,
-        "hide": false,
-        "iconColor": "rgb(255, 152, 0)",
-        "expr": "vector(1) and (((hour() == 1 or hour() == 4 or hour() == 6 or hour() == 10) and minute() < 15) and (vector(time()) >= 1786896000))",
-        "step": "900s",
-        "target": {
-          "expr": "vector(1) and (((hour() == 1 or hour() == 4 or hour() == 6 or hour() == 10) and minute() < 15) and (vector(time()) >= 1786896000))",
-          "refId": "peak",
-          "interval": "900s",
-          "legendFormat": ""
-        },
-        "titleFormat": "openrouter rate change",
-        "textFormat": "",
-        "tagKeys": "",
-        "useValueForTime": false
       }
     ]
   }

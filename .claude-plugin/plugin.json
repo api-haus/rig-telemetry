@@ -1,7 +1,7 @@
 {
   "name": "rig-telemetry",
   "displayName": "Rig Telemetry",
-  "description": "Diagnose a loaded Linux workstation from recorded telemetry: split the load average into CPU and IO, attribute it to a named process group or docker compose stack, cap a runaway development environment, tell whether the machine's cooling has degraded, and price what every AI coding harness on it used at published API rates.",
+  "description": "Diagnose a loaded Linux workstation from recorded telemetry: split the load average into CPU and IO, attribute it to a named process group or docker compose stack, cap a runaway development environment, name who is using the internet and whether the link is full or merely queued, tell whether the machine's cooling has degraded, and price what every AI coding harness on it used at published API rates.",
   "version": "1.1.0",
   "author": {
     "name": "Kassinity",
@@ -22,6 +22,9 @@
     "ai-cost",
     "token-usage",
     "claude-code",
-    "codex"
+    "codex",
+    "network",
+    "bandwidth",
+    "bufferbloat"
   ]
 }

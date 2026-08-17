@@ -1,0 +1,243 @@
+# Layer 2 and 3 — the link, and who is on it. Series reference: docs/metrics.md.
+#
+# Rates here are taken over 1m, not the 5m the rest of the stack uses: a
+# download starts, fills the line and stops well inside five minutes, and a 5m
+# average of that reads as a half-busy link that never lagged anyone.
+
+groups:
+
+  - name: rig-net
+    interval: 15s
+    rules:
+
+      # --- interfaces -----------------------------------------------------
+      - record: rig:net:rx_bytes_per_sec
+        expr: sum without (instance, job) (rate(node_network_receive_bytes_total[1m]))
+
+      - record: rig:net:tx_bytes_per_sec
+        expr: sum without (instance, job) (rate(node_network_transmit_bytes_total[1m]))
+
+      - record: rig:net:errors_per_sec
+        expr: |
+          sum without (instance, job) (
+            rate(node_network_receive_errs_total[5m])
+            + rate(node_network_transmit_errs_total[5m])
+          )
+
+      - record: rig:net:drops_per_sec
+        expr: |
+          sum without (instance, job) (
+            rate(node_network_receive_drop_total[5m])
+            + rate(node_network_transmit_drop_total[5m])
+          )
+
+      # --- the uplink alone -----------------------------------------------
+      # A dozen bridges, a tailnet and two VM networks all carry bytes that
+      # never leave the house. The exporter marks the interface the default
+      # route uses; everything below joins on it.
+      - record: rig:net:link:rx_bits_per_sec
+        expr: sum(rig:net:rx_bytes_per_sec * on (device) group_left rignet_default_route) * 8
+
+      - record: rig:net:link:tx_bits_per_sec
+        expr: sum(rig:net:tx_bytes_per_sec * on (device) group_left rignet_default_route) * 8
+
+      - record: rig:net:link:capacity_rx_bits_per_sec
+        expr: max(rignet_link_capacity_bits_per_second{direction="down"})
+
+      - record: rig:net:link:capacity_tx_bits_per_sec
+        expr: max(rignet_link_capacity_bits_per_second{direction="up"})
+
+      # Empty until RIG_NET_DOWN_MBIT is set. An unset line has no known
+      # capacity, and a saturation figure invented from the busiest minute so
+      # far would read 100% every time a download went faster than the last.
+      - record: rig:net:link:rx_saturation
+        expr: |
+          rig:net:link:rx_bits_per_sec
+          / (rig:net:link:capacity_rx_bits_per_sec > 0)
+
+      - record: rig:net:link:tx_saturation
+        expr: |
+          rig:net:link:tx_bits_per_sec
+          / (rig:net:link:capacity_tx_bits_per_sec > 0)
+
+      # What this line has actually been seen to carry. The honest stand-in
+      # when nobody has typed in what it was sold as.
+      - record: rig:net:link:peak_rx_bits_per_sec
+        expr: max_over_time(rig:net:link:rx_bits_per_sec[7d])
+
+      - record: rig:net:link:peak_tx_bits_per_sec
+        expr: max_over_time(rig:net:link:tx_bits_per_sec[7d])
+
+      - record: rig:net:link:rx_share_of_peak
+        expr: |
+          rig:net:link:rx_bits_per_sec
+          / clamp_min(rig:net:link:peak_rx_bits_per_sec, 1)
+
+      # --- is it queued? ---------------------------------------------------
+      - record: rig:net:rtt_seconds
+        expr: max without (instance, job) (rignet_probe_rtt_seconds)
+
+      - record: rig:net:rtt_floor_seconds
+        expr: max without (instance, job) (rignet_probe_rtt_floor_seconds)
+
+      # The whole answer to "the download is capped and it still lags". A full
+      # link delivers its bytes and makes every interactive packet wait behind
+      # them; 1.0 is an idle path, 10 is half a second of somebody else's
+      # queue in front of every keystroke.
+      - record: rig:net:bufferbloat_ratio
+        expr: |
+          rig:net:rtt_seconds
+          / clamp_min(rig:net:rtt_floor_seconds, 0.0002)
+
+      - record: rig:net:loss_ratio
+        expr: max without (instance, job) (rignet_probe_loss_ratio)
+
+      # Loss as the sender sees it, machine-wide. Rises before ICMP loss does,
+      # because a queue drops the bulk flow's packets first.
+      - record: rig:net:retransmit_ratio
+        expr: |
+          max(rate(node_netstat_Tcp_RetransSegs[5m]))
+          / clamp_min(max(rate(node_netstat_Tcp_OutSegs[5m])), 1)
+
+      - record: rig:net:resolver_seconds
+        expr: max(rignet_resolver_seconds)
+
+      - record: rig:net:tcp_established
+        expr: max(node_netstat_Tcp_CurrEstab)
+
+      # --- the radio -------------------------------------------------------
+      - record: rig:net:wifi_signal_dbm
+        expr: max without (instance, job) (rignet_wifi_signal_dbm)
+
+      - record: rig:net:wifi_quality
+        expr: max without (instance, job) (rignet_wifi_link_quality)
+
+      # Airtime spent saying the same thing again. On a shared channel this
+      # rises long before throughput falls.
+      - record: rig:net:wifi_retries_per_sec
+        expr: sum without (instance, job) (rate(rignet_wifi_retries_total[5m]))
+
+      # --- who ------------------------------------------------------------
+      - record: rig:net:proc:rx_bytes_per_sec
+        expr: sum without (proto, instance, job) (rate(rignet_proc_received_bytes_total[1m]))
+
+      - record: rig:net:proc:tx_bytes_per_sec
+        expr: sum without (proto, instance, job) (rate(rignet_proc_sent_bytes_total[1m]))
+
+      - record: rig:net:proc:bytes_per_sec
+        expr: |
+          sum without (proto, instance, job) (rate(rignet_proc_received_bytes_total[1m]))
+          + sum without (proto, instance, job) (rate(rignet_proc_sent_bytes_total[1m]))
+
+      # The "who is using the internet" series. Container bridges, VM networks
+      # and the tailnet are dropped, because none of them touch the uplink.
+      - record: rig:net:proc:uplink_bytes_per_sec
+        expr: |
+          sum by (groupname) (
+            rate(rignet_proc_received_bytes_total{scope="internet"}[1m])
+            + rate(rignet_proc_sent_bytes_total{scope="internet"}[1m])
+          )
+
+      - record: rig:net:proc:uplink_rx_bytes_per_sec
+        expr: |
+          sum by (groupname) (rate(rignet_proc_received_bytes_total{scope="internet"}[1m]))
+
+      - record: rig:net:proc:uplink_tx_bytes_per_sec
+        expr: |
+          sum by (groupname) (rate(rignet_proc_sent_bytes_total{scope="internet"}[1m]))
+
+      - record: rig:net:proc:retransmit_bytes_per_sec
+        expr: sum without (instance, job) (rate(rignet_proc_retransmitted_bytes_total[1m]))
+
+      - record: rig:net:proc:rtt_seconds
+        expr: max without (instance, job) (rignet_proc_rtt_seconds)
+
+      - record: rig:net:proc:connections
+        expr: sum without (proto, state, instance, job) (rignet_proc_connections)
+
+      # --- where it goes ---------------------------------------------------
+      - record: rig:net:peer:rx_bytes_per_sec
+        expr: sum without (instance, job) (rate(rignet_peer_received_bytes_total[1m]))
+
+      - record: rig:net:peer:tx_bytes_per_sec
+        expr: sum without (instance, job) (rate(rignet_peer_sent_bytes_total[1m]))
+
+      - record: rig:net:peer:bytes_per_sec
+        expr: |
+          sum without (instance, job) (rate(rignet_peer_received_bytes_total[1m]))
+          + sum without (instance, job) (rate(rignet_peer_sent_bytes_total[1m]))
+
+      - record: rig:net:service_bytes_per_sec
+        expr: |
+          sum by (service) (
+            rate(rignet_peer_received_bytes_total[1m])
+            + rate(rignet_peer_sent_bytes_total[1m])
+          )
+
+      # --- how much of this is guesswork ----------------------------------
+      # Sockets are sampled, so a connection that opens and closes between two
+      # passes is never seen, and UDP has no byte counter at all until
+      # conntrack accounting is on. This is the size of that blind spot, not a
+      # figure to be argued away.
+      - record: rig:net:attributed_ratio
+        expr: |
+          max(rate(rignet_attributed_bytes_total[5m]))
+          / clamp_min(max(rate(rignet_link_bytes_total[5m])), 1)
+
+      - record: rig:net:unattributed_bytes_per_sec
+        expr: |
+          clamp_min(
+            max(rate(rignet_link_bytes_total[5m]))
+            - max(rate(rignet_attributed_bytes_total[5m])),
+            0
+          )
+
+      - record: rig:net:conntrack_available
+        expr: max(rignet_conntrack_available)
+
+      - record: rig:net:scrape_age_seconds
+        expr: time() - max(rignet_scrape_timestamp_seconds)
+
+  - name: rig-alerts-network
+    rules:
+
+      # Only fires where the line's speed was typed in — see docs/network.md.
+      - alert: RigLinkSaturated
+        expr: rig:net:link:rx_saturation > 0.9
+        for: 3m
+        labels: {severity: warning, domain: network}
+        annotations:
+          summary: "Downlink {{ $value | humanizePercentage }} of what the line is sold as"
+          diagnose: "rig net. topk(5, rig:net:proc:uplink_bytes_per_sec) names who is on it."
+
+      - alert: RigLinkQueued
+        expr: rig:net:bufferbloat_ratio > 5 and rig:net:rtt_seconds > 0.15
+        for: 3m
+        labels: {severity: warning, domain: network}
+        annotations:
+          summary: "Round trip to {{ $labels.target }} is {{ $value | printf \"%.0f\" }}x its idle value — the link is queued"
+          diagnose: "Bufferbloat, not bandwidth. Something is filling the line; every other packet waits behind it. rig net who."
+
+      - alert: RigPacketLoss
+        expr: rig:net:loss_ratio > 0.05
+        for: 5m
+        labels: {severity: warning, domain: network}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of echoes to {{ $labels.target }} never came back"
+          diagnose: "Loss to the gateway is the radio or the cable. Loss past it and none to the gateway is the ISP."
+
+      - alert: RigWifiWeak
+        expr: rig:net:wifi_signal_dbm < -72 and rig:net:wifi_signal_dbm > -100
+        for: 10m
+        labels: {severity: warning, domain: network}
+        annotations:
+          summary: "{{ $labels.device }} at {{ $value | printf \"%.0f\" }} dBm — the radio is dropping to slow rates"
+          diagnose: "Signal, not bandwidth. Nothing on the wire side will fix a link that spends its airtime retrying."
+
+      - alert: RigNetBlindToUdp
+        expr: rig:net:attributed_ratio < 0.6 and rig:net:conntrack_available == 0
+        for: 30m
+        labels: {severity: info, domain: network}
+        annotations:
+          summary: "Only {{ $value | humanizePercentage }} of link traffic has a named owner"
+          diagnose: "QUIC and every other UDP byte is unattributed. sysctl -w net.netfilter.nf_conntrack_acct=1 gives them an owner. docs/network.md"

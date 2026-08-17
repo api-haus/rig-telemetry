@@ -121,7 +121,7 @@ def ts(L, title, queries, *, unit="short", w=12, h=8, stack=False, fill=0,
 
 
 def stat(L, title, expr, *, unit="short", w=3, h=4, desc="", thresholds=None,
-         decimals=None, graph=True, text_size=32):
+         decimals=None, graph=True, text_size=32, no_value=None):
     return L.place({
         "type": "stat", "title": title, "description": desc, "datasource": DS,
         "targets": targets([expr]),
@@ -129,6 +129,7 @@ def stat(L, title, expr, *, unit="short", w=3, h=4, desc="", thresholds=None,
             "unit": unit, "decimals": decimals,
             "thresholds": thresholds or steps(),
             "color": {"mode": "thresholds"},
+            **({"noValue": no_value} if no_value else {}),
         }, "overrides": []},
         "options": {
             "graphMode": "area" if graph else "none",
@@ -327,6 +328,16 @@ def overview():
     stat(L, "VRAM free", "rig:gpu:vram_free_bytes", unit="bytes", w=6,
          desc="What is left for the next model, game or compositor buffer.")
     stat(L, "GPU power", "rig:gpu_watts", unit="watt", w=6)
+    stat(L, "Downlink", "rig:net:link:rx_bits_per_sec", unit="bps", w=6,
+         desc="The uplink interface alone. The Network dashboard splits it by process group.")
+    stat(L, "Uplink", "rig:net:link:tx_bits_per_sec", unit="bps", w=6)
+    stat(L, "Link queue", 'max(rig:net:bufferbloat_ratio{kind="internet"})', unit="none", w=6,
+         decimals=1,
+         desc="Round trip over its own idle value. Above 4, interactive traffic is waiting "
+              "behind a bulk transfer and no download speed cap will fix it.",
+         thresholds=steps(("yellow", 2), ("orange", 4), ("red", 10)))
+    stat(L, "Round trip", 'max(rig:net:rtt_seconds{kind="internet"})', unit="s", w=6,
+         thresholds=steps(("yellow", 0.06), ("orange", 0.15), ("red", 0.4)))
 
     L.row("Is it CPU, GPU, memory, or disk?")
     ts(L, "Load average, split", [
@@ -372,6 +383,17 @@ def overview():
        unit="bytes", stack=True, desc="Proportional set size: pages shared between forks are divided, not double counted.")
     ts(L, "Paging from disk by process group", [("topk(8, rig:proc:major_faults_per_sec)", "{{groupname}}")],
        unit="none", stack=True, desc="Major faults per second. Under swap pressure this names who is paying for it.")
+    ts(L, "Internet by process group",
+       [("topk(8, rig:net:proc:uplink_bytes_per_sec)", "{{groupname}}")],
+       unit="Bps", stack=True,
+       desc="Bytes to and from the internet. Traffic to container bridges, VMs and the "
+            "tailnet is excluded — none of it touches the line.")
+    ts(L, "Round trip against idle", [
+        ("rig:net:rtt_seconds", "{{target}} ({{kind}}) now"),
+        ("rig:net:rtt_floor_seconds", "{{target}} idle"),
+    ], unit="s",
+       desc="The two lines apart is a queue outside this machine. That is what a saturated "
+            "link feels like from inside it, and no CPU or disk panel will show it.")
 
     L.row("Machine")
     ts(L, "Disk busy", [("rig:disk:util_ratio", "{{device}}")], unit="percentunit", max_=1, w=8)
@@ -551,7 +573,150 @@ def storage():
 
 
 # --------------------------------------------------------------------------
-# 5. Compute — the two processors, together first and then each in depth
+# 5. Network — who is on the link, and why a capped download still lags
+# --------------------------------------------------------------------------
+
+QUEUE = ("A link is never slow, it is full. When it is full the bytes still arrive at the same "
+         "rate and every interactive packet waits behind them, so the honest measure of "
+         "'the internet is laggy' is round-trip time against its own idle value, not throughput.")
+
+
+def network():
+    L = Layout()
+    L.row("Verdict")
+    stat(L, "Down", "rig:net:link:rx_bits_per_sec", unit="bps", w=3,
+         desc="The default-route interface alone. Container bridges, VMs and the tailnet "
+              "carry bytes that never reach the ISP.")
+    stat(L, "Up", "rig:net:link:tx_bits_per_sec", unit="bps", w=3)
+    stat(L, "Of the line", "rig:net:link:rx_saturation", unit="percentunit", w=3,
+         no_value="No line speed set. RIG_NET_DOWN_MBIT in .env, then this reads against "
+                  "what you pay for instead of against the busiest minute so far.",
+         desc="Downlink against RIG_NET_DOWN_MBIT.",
+         thresholds=steps(("yellow", 0.6), ("orange", 0.85), ("red", 0.95)))
+    stat(L, "Of its own best", "rig:net:link:rx_share_of_peak", unit="percentunit", w=3,
+         desc="Against the fastest this line has been seen to go in 7 days. The stand-in "
+              "while nobody has typed in what it was sold as.",
+         thresholds=steps(("yellow", 0.6), ("orange", 0.85)))
+    stat(L, "Queue", 'max(rig:net:bufferbloat_ratio{kind="internet"})', unit="none", w=3,
+         decimals=1, desc=QUEUE + " 1.0 is an idle path. Above 4 the lag is real and it is "
+                                  "not the download rate that caused it.",
+         thresholds=steps(("yellow", 2), ("orange", 4), ("red", 10)))
+    stat(L, "Round trip", 'max(rig:net:rtt_seconds{kind="internet"})', unit="s", w=3,
+         thresholds=steps(("yellow", 0.06), ("orange", 0.15), ("red", 0.4)))
+    stat(L, "Loss", "max(rig:net:loss_ratio)", unit="percentunit", w=3,
+         desc="Echoes that never came back. To the gateway it is the radio or the cable; "
+              "only past it is it the ISP.",
+         thresholds=steps(("yellow", 0.01), ("orange", 0.05)))
+    stat(L, "Named owner", "rig:net:attributed_ratio", unit="percentunit", w=3,
+         desc="Share of the link's bytes this stack can attribute to a process group. "
+              "The rest is UDP without conntrack accounting, and connections too short to "
+              "be sampled. `rig net doctor` says which.",
+         thresholds=steps(("orange", 0.5), ("yellow", 0.8), ("green", 0.9), base="red"))
+
+    L.row("Who is using it")
+    ts(L, "Down, by process group",
+       [("topk(8, rig:net:proc:uplink_rx_bytes_per_sec)", "{{groupname}}")],
+       unit="Bps", stack=True, w=12,
+       desc="Internet only, and named by the same groups as every other dashboard. "
+            "Defined in process-exporter/config.yml.")
+    ts(L, "Up, by process group",
+       [("topk(8, rig:net:proc:uplink_tx_bytes_per_sec)", "{{groupname}}")],
+       unit="Bps", stack=True, w=12,
+       desc="The uplink is usually the smaller pipe, and filling it queues the "
+            "acknowledgements every download depends on. A backup or a sync client here "
+            "slows a machine that is downloading nothing.")
+    ts(L, "Link against what has an owner", [
+        ("rate(rignet_link_bytes_total[5m])", "the interface counted"),
+        ("rate(rignet_attributed_bytes_total[5m])", "attributed to a group"),
+    ], unit="Bps", w=12,
+       desc="The gap is UDP with no conntrack accounting plus connections that opened and "
+            "closed between two samples. Measured, not assumed.")
+    bars(L, "Total by process group",
+         'topk(12, sum by (groupname) (rignet_proc_received_bytes_total{scope="internet"})'
+         ' + sum by (groupname) (rignet_proc_sent_bytes_total{scope="internet"}))',
+         unit="bytes", w=12, decimals=0,
+         desc="Everything recorded, per group. A cumulative counter, so this is the whole "
+              "history the exporter has watched.")
+
+    L.row("Is it queued?")
+    ts(L, "Round trip time against its own idle value", [
+        ("rig:net:rtt_seconds", "{{target}} ({{kind}}) now"),
+        ("rig:net:rtt_floor_seconds", "{{target}} idle"),
+    ], unit="s", w=12,
+       desc=QUEUE + " The floor line is the best this path has answered in since the exporter "
+                    "started. Distance between the two lines is somebody else's queue.")
+    ts(L, "Queue factor", [("rig:net:bufferbloat_ratio", "{{target}} ({{kind}})")],
+       unit="none", w=12, min_=0, thresholds=steps(("orange", 4)),
+       desc="Round trip over idle round trip. This is the panel to open when a download is "
+            "capped and the machine still feels slow — the cap limits the rate, not the "
+            "queue the router builds.")
+    ts(L, "Loss and retransmits", [
+        ("rig:net:loss_ratio", "{{target}} icmp loss"),
+        ("rig:net:retransmit_ratio", "tcp segments sent again"),
+    ], unit="percentunit", w=12,
+       desc="TCP retransmits rise before ICMP loss does: a full queue drops the bulk flow's "
+            "packets first, which is exactly the traffic nobody notices.")
+    ts(L, "Worst round trip per process group",
+       [("topk(8, rig:net:proc:rtt_seconds)", "{{groupname}}")], unit="s", w=12,
+       desc="Taken from each group's own established connections, so a game and a download "
+            "on the same link can be told apart. A game climbing here is the complaint, "
+            "whatever the download is doing.")
+
+    L.row("Where it goes")
+    bars(L, "Down, by remote address",
+         'topk(12, rig:net:peer:rx_bytes_per_sec{scope="internet"})', unit="Bps", w=8,
+         desc="Addresses beyond the busiest fold into `other`. `rig net peers` resolves names.")
+    bars(L, "Up, by remote address",
+         'topk(12, rig:net:peer:tx_bytes_per_sec{scope="internet"})', unit="Bps", w=8)
+    bars(L, "By service", "topk(10, rig:net:service_bytes_per_sec)", unit="Bps", w=8,
+         desc="Named from the remote port. A number instead of a name means a port nobody "
+              "has agreed on, which is normal for peer-to-peer and for games.")
+    ts(L, "Traffic by service", [("topk(8, rig:net:service_bytes_per_sec)", "{{service}}")],
+       unit="Bps", stack=True, w=12)
+    table(L, "Busiest peers now",
+          [('topk(15, rig:net:peer:bytes_per_sec{scope="internet"})', "")],
+          w=12, unit="Bps", rename={"Value": "bytes/s"},
+          desc="Instant rate to each address. `rig net conns` has the per-connection detail, "
+               "which is deliberately never a metric — one series per socket would cost more "
+               "than the rest of this stack together.")
+
+    L.row("The link itself")
+    ts(L, "Every interface, down", [("rig:net:rx_bytes_per_sec", "{{device}}")], unit="Bps", w=12,
+       desc="Bridges and virtual interfaces included. Docker gives one bridge per compose "
+            "project, so a busy line here that is not the default route never left the machine.")
+    ts(L, "Every interface, up", [("rig:net:tx_bytes_per_sec", "{{device}}")], unit="Bps", w=12)
+    ts(L, "Wifi signal", [("rig:net:wifi_signal_dbm", "{{device}}")], unit="dBm", w=8,
+       no_value="No wireless interface — this machine is on a cable.",
+       desc="Above -60 dBm is strong, below -72 the radio steps down to slow rates and the "
+            "link is the bottleneck before any queue is.")
+    ts(L, "Wifi retries", [("rig:net:wifi_retries_per_sec", "{{device}}")], unit="none", w=8,
+       no_value="No wireless interface.",
+       desc="Frames the radio had to send again. Airtime spent on nothing, and it rises long "
+            "before throughput falls.")
+    ts(L, "Errors and drops", [
+        ("rig:net:errors_per_sec", "{{device}} errors"),
+        ("rig:net:drops_per_sec", "{{device}} drops"),
+    ], unit="none", w=8,
+       desc="Drops on a virtual interface are ordinary. Drops on the default route are not.")
+    ts(L, "Established connections", [
+        ("rig:net:tcp_established", "machine total"),
+        ("topk(6, rig:net:proc:connections)", "{{groupname}}"),
+    ], unit="none", w=12,
+       desc="A group holding hundreds of connections is either a peer-to-peer client or a "
+            "download accelerator, and both defeat any single-connection rate cap.")
+    ts(L, "Name resolution", [("rig:net:resolver_seconds", "system resolver")], unit="s", w=12,
+       desc="Time for a name to become an address, through the same path an application "
+            "uses. Slow here with a quiet link is the resolver, not the line.")
+
+    return dashboard("rig-network", "Rig — Network",
+                     "Who is using the link, where it goes, and whether it is full. The queue "
+                     "panels answer the question throughput cannot: why everything lags while "
+                     "a download sits under its own speed cap.",
+                     L, tags=["network"])
+
+
+# --------------------------------------------------------------------------
+# 6. Compute — the two processors, together first and then each in depth
 # --------------------------------------------------------------------------
 
 def compute():
@@ -758,7 +923,7 @@ def compute():
 
 
 # --------------------------------------------------------------------------
-# 6. AI — what the coding harnesses spent, at API list prices
+# 7. AI — what the coding harnesses spent, at API list prices
 # --------------------------------------------------------------------------
 
 LIST_PRICE = ("Every dollar here is API list value: what these tokens would cost billed through "
@@ -924,6 +1089,7 @@ def ai():
 BOARDS = {
     "rig-overview.json": overview,
     "rig-who.json": who,
+    "rig-network.json": network,
     "rig-compute.json": compute,
     "rig-thermals.json": thermals,
     "rig-storage.json": storage,

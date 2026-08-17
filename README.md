@@ -60,6 +60,7 @@ to change the login.
 | nvidia_gpu_exporter | GPU utilisation, temperature, power, fan, clocks, VRAM, PCIe, throttle headroom |
 | smartctl-exporter | NVMe wear, media errors, unsafe shutdowns, per-drive temperature |
 | cAdvisor | Per-container CPU, memory and IO |
+| net-exporter | Bytes, round-trip time and retransmissions **per process group**, per remote address, plus link queue, packet loss and wifi signal |
 | harness-exporter | Tokens and API-list dollars per AI coding harness, model, project and subagent |
 
 Scrape every 15s, 2 year retention capped at 30 GB. The harness exporter is
@@ -71,6 +72,7 @@ scraped every 60s — spend moves in turns, not in seconds.
 | --- | --- |
 | **Rig — Overview** | Is the bottleneck CPU, GPU, memory or disk, and who owns it |
 | **Rig — Who** | Every resource attributed to a named process group |
+| **Rig — Network** | Who is on the link, where it goes, and whether it is full or merely queued |
 | **Rig — Compute** | Which end the work is stuck at, then CPU and GPU in depth |
 | **Rig — Thermals** | Temperatures, and cooling efficiency against a month-old baseline |
 | **Rig — Storage** | Throughput, queue latency, capacity, drive endurance |
@@ -78,12 +80,37 @@ scraped every 60s — spend moves in turns, not in seconds.
 
 They are generated, not hand-edited: `tools/gen-dashboards.py`.
 
-## The three things this does that a stock stack does not
+## What this does that a stock stack does not
 
 **It attributes load to a name.** `rig:proc:blocked` splits the load average by
 process group, so a load of 500 resolves to `build:rust-link 598` instead of a
 shrug. Groups are defined in `process-exporter/config.yml` and survive reboots,
 unlike PIDs.
+
+**It names who is using the internet, and separates full from queued.** The
+kernel counts bytes per interface and never per process, so this reads every
+TCP socket's own counters over netlink and maps them back through
+`/proc/<pid>/fd` to the same process groups everything else uses. Then it says
+the thing throughput cannot: a link is never slow, it is full, and a full link
+delivers its bytes while every interactive packet waits behind them. That wait
+is measured against the path's own idle round-trip time, so a download sitting
+under its speed cap and a machine that lags are one fact instead of two.
+
+```
+$ rig net
+VERDICT: QUEUED — the line is full and everything waits behind it
+         round trip to 1.1.1.1 is 214ms against 17ms idle — 12.6x.
+         this is a queue, not a shortage of bandwidth.
+
+-- who is on the internet ------------------------------------------------
+  group            down      up       conns  worst rtt
+  game:steam       5.4M/s    18K/s    39     210ms
+  browser:zen-bin  509.3K/s  1.2K/s   13     35ms
+```
+
+`rig net speedtest` fills the line on purpose and grades the queue it makes.
+`docs/network.md` explains the method, the UDP blind spot, and the one sysctl
+that closes it.
 
 **It knows when the machine needs cleaning.** Dust does not raise a temperature
 you can read off a gauge — it raises *thermal resistance*, the degrees needed
@@ -126,8 +153,8 @@ lookup, and why this reports about half of what Claude Code's own statistics do.
 ## Claude Code plugin
 
 This repo is also a Claude Code plugin. Installing it puts `rig` on PATH and
-adds four skills, so an agent can answer "why is this machine slow" without
-being told how.
+adds the skills below, so an agent can answer "why is this machine slow"
+without being told how.
 
 ```
 /plugin marketplace add api-haus/rig-telemetry
@@ -137,6 +164,7 @@ being told how.
 | Skill | Fires on |
 | --- | --- |
 | `rig-diagnose` | machine slow, loaded, thrashing, "what is using my CPU", "what happened last night" |
+| `rig-network` | slow internet, "who is using all the bandwidth", laggy calls or games, a capped download that still lags |
 | `rig-devenv` | a project's containers, brokers, watchers or toolchains are loading the machine |
 | `rig-thermals` | heat, fans, throttling, "does my PC need cleaning" |
 | `rig-aicost` | AI spend, token burn, "what did this project cost", cache reads, subscription windows |
@@ -173,19 +201,21 @@ process-exporter/config.yml   process group definitions
 grafana/                      datasource, dashboard provider, generated dashboards
 tools/rig                     the CLI
 tools/gen-dashboards.py       dashboard generator
+tools/net-exporter.py         per-process network attribution and link quality
 tools/harness_usage.py        one reader per AI harness, and the price lookup
 tools/harness-exporter.py     serves that to Prometheus
 share/prices.tsv              model names that reach no models.dev entry
 bin/rig                       PATH shim, added automatically by the plugin
 .claude-plugin/               plugin and marketplace manifests
-skills/                       rig-diagnose, rig-devenv, rig-thermals, rig-aicost
-docs/                         metrics, thermal method, runbook, adapting
+skills/                       rig-diagnose, rig-network, rig-devenv, rig-thermals, rig-aicost
+docs/                         metrics, network, thermal method, runbook, adapting
 ```
 
 ## Docs
 
 - [AGENTS.md](AGENTS.md) — the query contract and diagnosis procedure
 - [docs/metrics.md](docs/metrics.md) — every series, explained
+- [docs/network.md](docs/network.md) — how a byte gets an owner, and why a capped download still lags
 - [docs/ai-usage.md](docs/ai-usage.md) — harness readers, token conventions, pricing
 - [docs/thermals.md](docs/thermals.md) — how the dust detection works
 - [docs/runbook.md](docs/runbook.md) — operations, upgrades, retention, backup

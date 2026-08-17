@@ -903,16 +903,296 @@
       "id": 13
     },
     {
+      "type": "stat",
+      "title": "Downlink",
+      "description": "The uplink interface alone. The Network dashboard splits it by process group.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:link:rx_bits_per_sec",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 32
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 9
+      },
+      "id": 14
+    },
+    {
+      "type": "stat",
+      "title": "Uplink",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:link:tx_bits_per_sec",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 32
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 9
+      },
+      "id": 15
+    },
+    {
+      "type": "stat",
+      "title": "Link queue",
+      "description": "Round trip over its own idle value. Above 4, interactive traffic is waiting behind a bulk transfer and no download speed cap will fix it.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(rig:net:bufferbloat_ratio{kind=\"internet\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "orange",
+                "value": 4
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 32
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 9
+      },
+      "id": 16
+    },
+    {
+      "type": "stat",
+      "title": "Round trip",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(rig:net:rtt_seconds{kind=\"internet\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.06
+              },
+              {
+                "color": "orange",
+                "value": 0.15
+              },
+              {
+                "color": "red",
+                "value": 0.4
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 32
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 9
+      },
+      "id": 17
+    },
+    {
       "type": "row",
       "title": "Is it CPU, GPU, memory, or disk?",
       "collapsed": false,
-      "id": 14,
+      "id": 18,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 13
       }
     },
     {
@@ -997,9 +1277,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 10
+        "y": 14
       },
-      "id": 15
+      "id": 19
     },
     {
       "type": "timeseries",
@@ -1101,9 +1381,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 10
+        "y": 14
       },
-      "id": 16
+      "id": 20
     },
     {
       "type": "timeseries",
@@ -1198,9 +1478,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 18
+        "y": 22
       },
-      "id": 17
+      "id": 21
     },
     {
       "type": "timeseries",
@@ -1280,9 +1560,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 18
+        "y": 22
       },
-      "id": 18
+      "id": 22
     },
     {
       "type": "timeseries",
@@ -1373,9 +1653,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 26
+        "y": 30
       },
-      "id": 19
+      "id": 23
     },
     {
       "type": "timeseries",
@@ -1455,21 +1735,21 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 26
+        "y": 30
       },
-      "id": 20
+      "id": 24
     },
     {
       "type": "row",
       "title": "Who",
       "collapsed": false,
-      "id": 21,
+      "id": 25,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 38
       }
     },
     {
@@ -1543,9 +1823,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 35
+        "y": 39
       },
-      "id": 22
+      "id": 26
     },
     {
       "type": "timeseries",
@@ -1618,9 +1898,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 35
+        "y": 39
       },
-      "id": 23
+      "id": 27
     },
     {
       "type": "timeseries",
@@ -1693,9 +1973,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 43
+        "y": 47
       },
-      "id": 24
+      "id": 28
     },
     {
       "type": "timeseries",
@@ -1768,21 +2048,178 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 43
+        "y": 47
       },
-      "id": 25
+      "id": 29
+    },
+    {
+      "type": "timeseries",
+      "title": "Internet by process group",
+      "description": "Bytes to and from the internet. Traffic to container bridges, VMs and the tailnet is excluded \u2014 none of it touches the line.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(8, rig:net:proc:uplink_bytes_per_sec)",
+          "legendFormat": "{{groupname}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 40,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 55
+      },
+      "id": 30
+    },
+    {
+      "type": "timeseries",
+      "title": "Round trip against idle",
+      "description": "The two lines apart is a queue outside this machine. That is what a saturated link feels like from inside it, and no CPU or disk panel will show it.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rig:net:rtt_seconds",
+          "legendFormat": "{{target}} ({{kind}}) now",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "rig:net:rtt_floor_seconds",
+          "legendFormat": "{{target}} idle",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 55
+      },
+      "id": 31
     },
     {
       "type": "row",
       "title": "Machine",
       "collapsed": false,
-      "id": 26,
+      "id": 32,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 51
+        "y": 63
       }
     },
     {
@@ -1852,9 +2289,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 52
+        "y": 64
       },
-      "id": 27
+      "id": 33
     },
     {
       "type": "timeseries",
@@ -1923,9 +2360,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 52
+        "y": 64
       },
-      "id": 28
+      "id": 34
     },
     {
       "type": "table",
@@ -1996,9 +2433,9 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 52
+        "y": 64
       },
-      "id": 29
+      "id": 35
     }
   ],
   "templating": {

@@ -128,6 +128,68 @@ meaningful next month.
 
 ---
 
+## `rig:net:` the link and who is on it — `prometheus/rules/25-net.yml`
+
+Method, limits and the sysctl that closes the UDP gap: [network.md](network.md).
+
+Rates here are taken over 1 minute, not the 5 the rest of the stack uses. A
+download starts, fills the line and stops well inside five minutes, and a 5m
+average of that reads as a half-busy link that never lagged anybody.
+
+### The link
+
+| Series | Labels | Meaning |
+| --- | --- | --- |
+| `rig:net:rx_bytes_per_sec`, `:tx_bytes_per_sec` | `device` | Every interface, bridges and tailnet included |
+| `rig:net:errors_per_sec`, `:drops_per_sec` | `device` | Drops on a virtual interface are ordinary; on the default route they are not |
+| `rig:net:link:rx_bits_per_sec`, `:tx_bits_per_sec` | — | The default-route interface alone, in the bits a line is sold in |
+| `rig:net:link:capacity_rx_bits_per_sec`, `:capacity_tx_bits_per_sec` | — | From `RIG_NET_DOWN_MBIT` / `RIG_NET_UP_MBIT`. Empty when unset |
+| `rig:net:link:rx_saturation`, `:tx_saturation` | — | Against that capacity. **Empty until the line speed is set** — an invented capacity would read 100% every time a download beat the last record |
+| `rig:net:link:peak_rx_bits_per_sec`, `:peak_tx_bits_per_sec` | — | Fastest seen in 7 days |
+| `rig:net:link:rx_share_of_peak` | — | Against that peak. The stand-in while no capacity is configured |
+
+### Is it queued?
+
+| Series | Labels | Meaning |
+| --- | --- | --- |
+| `rig:net:rtt_seconds` | `target`, `kind` | ICMP round trip. `kind` is `gateway` or `internet` — loss to the router is the radio, loss past it is the ISP |
+| `rig:net:rtt_floor_seconds` | `target`, `kind` | Best seen since the exporter started: the unloaded path |
+| `rig:net:bufferbloat_ratio` | `target`, `kind` | Round trip over its own idle value. **The answer to "the download is capped and it still lags".** Above 4 the lag is a queue, not a rate |
+| `rig:net:loss_ratio` | `target`, `kind` | Echoes that never came back |
+| `rig:net:retransmit_ratio` | — | TCP segments sent again, machine-wide. Rises before ICMP loss: a full queue drops the bulk flow first |
+| `rig:net:resolver_seconds` | — | Time for a name to become an address, through the system path |
+| `rig:net:tcp_established` | — | Open connections, machine-wide |
+| `rig:net:wifi_signal_dbm`, `:wifi_quality` | `device` | Below −72 dBm the radio is the bottleneck before any queue is |
+| `rig:net:wifi_retries_per_sec` | `device` | Frames sent again. Airtime spent on nothing |
+
+### Who, and where
+
+| Series | Labels | Meaning |
+| --- | --- | --- |
+| `rig:net:proc:rx_bytes_per_sec`, `:tx_bytes_per_sec` | `groupname`, `scope` | Per process group. `scope` is `internet`, `private` or `local` |
+| `rig:net:proc:uplink_bytes_per_sec` | `groupname` | **The "who is using the internet" series.** Bridges, VMs and the tailnet excluded |
+| `rig:net:proc:uplink_rx_bytes_per_sec`, `:uplink_tx_bytes_per_sec` | `groupname` | The same, split by direction |
+| `rig:net:proc:retransmit_bytes_per_sec` | `groupname` | Bytes the kernel had to send again for this group |
+| `rig:net:proc:rtt_seconds` | `groupname` | Worst round trip among that group's established connections |
+| `rig:net:proc:connections` | `groupname` | Open connections. Hundreds means peer-to-peer or a download accelerator, and both defeat a single-connection rate cap |
+| `rig:net:peer:rx_bytes_per_sec`, `:tx_bytes_per_sec`, `:bytes_per_sec` | `peer`, `service`, `scope` | Per remote address. Beyond the busiest, addresses fold into `other` |
+| `rig:net:service_bytes_per_sec` | `service` | Named from the remote port; a number means a port nobody has agreed on |
+
+### How much of this is guesswork
+
+| Series | Meaning |
+| --- | --- |
+| `rig:net:attributed_ratio` | Share of the link's bytes with a named owner, against the interface's own counters |
+| `rig:net:unattributed_bytes_per_sec` | The rest, in bytes |
+| `rig:net:conntrack_available` | 0 means every UDP byte — QUIC included — is unattributed. `sysctl net.netfilter.nf_conntrack_acct=1` |
+| `rig:net:scrape_age_seconds` | Since the exporter's last pass |
+
+UDP has no byte counter in the kernel's socket layer, and sockets are sampled
+every 10 seconds, so a connection that opens and closes between two passes is
+never seen. `attributed_ratio` is the measured size of both gaps.
+
+---
+
 ## `rig:thermal:` cooling health — `prometheus/rules/30-thermal.yml`
 
 Method and failure modes: [thermals.md](thermals.md).
@@ -203,6 +265,8 @@ Each alert carries a `diagnose` annotation naming the query that follows it up.
 
 Saturation: `RigIOStall`, `RigSwapThrash`, `RigLoadIOBound`, `RigCPUSaturated`,
 `RigMemoryExhausted`, `RigVRAMExhausted`, `RigFilesystemFilling`.
+Network, in `25-net.yml`: `RigLinkSaturated`, `RigLinkQueued`, `RigPacketLoss`,
+`RigWifiWeak`, `RigNetBlindToUdp`.
 Thermal: `RigGPUThrottleImminent`, `RigCPUHot`, `RigPumpStalled`,
 `RigCoolingNeedsCleaning`, `RigRadiatorNeedsCleaning`, `RigMountDegraded`.
 Hardware: `RigDiskWearHigh`, `RigDiskMediaErrors`, `RigDiskSmartFailing`.
@@ -223,3 +287,4 @@ AI, in `50-ai.yml`: `RigAiExporterDown`, `RigAiLedgerStale`, `RigAiPricesStale`,
 | `smartctl_device_*` | smartctl-exporter | Wear, media errors, power-on hours, unsafe shutdowns |
 | `container_*` | cAdvisor | Per-container; some high-cardinality families are dropped at scrape time |
 | `aiusage_*` | harness-exporter | The source for `rig:ai:*`. Counters are lifetime totals from the session files on disk. |
+| `rignet_*` | net-exporter | The source for `rig:net:*`. Per-socket counters over netlink, conntrack flows, ICMP probes and the radio. Per-connection detail is served at `/flows` and is never a metric. |

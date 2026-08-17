@@ -132,6 +132,20 @@ def human_bytes(n: float | None) -> str:
     return f"{n:.1f}E"
 
 
+def human_bits(n: float | None) -> str:
+    """Decimal, because that is how a line is sold and how a router reports it."""
+    if n is None:
+        return "n/a"
+    for unit, div in (("Gb/s", 1e9), ("Mb/s", 1e6), ("kb/s", 1e3)):
+        if abs(n) >= div:
+            return f"{n / div:.1f} {unit}"
+    return f"{n:.0f} b/s"
+
+
+def ms(v, fmt="{:.1f}ms") -> str:
+    return "n/a" if v is None else fmt.format(v * 1000)
+
+
 def num(v, fmt="{:.2f}", dash="n/a") -> str:
     return dash if v is None else fmt.format(v)
 
@@ -199,6 +213,14 @@ def cmd_why(args) -> int:
         "cpu_c": scalar("rig:cpu_celsius", at),
         "gpu_c": scalar("rig:gpu_celsius", at),
         "gpu_headroom": scalar("rig:thermal:gpu_headroom_c", at),
+        "net_down_bits": scalar("rig:net:link:rx_bits_per_sec", at),
+        "net_up_bits": scalar("rig:net:link:tx_bits_per_sec", at),
+        "net_saturation": scalar("rig:net:link:rx_saturation", at),
+        # The path off the machine, not the hop to the router: a gateway that
+        # answers in 1ms reads as 3x queued the moment it answers in 3ms.
+        "net_bloat": scalar('max(rig:net:bufferbloat_ratio{kind="internet"})', at),
+        "net_rtt": scalar('max(rig:net:rtt_seconds{kind="internet"})', at),
+        "net_loss": scalar("max(rig:net:loss_ratio)", at),
     }
 
     verdict, because = classify(f)
@@ -210,6 +232,7 @@ def cmd_why(args) -> int:
         "io": series("topk(5, rig:proc:io_bytes_per_sec > 0)", "groupname", at),
         "rss": series("topk(5, rig:proc:rss_proportional_bytes)", "groupname", at),
         "swap": series("topk(5, rig:proc:swap_bytes > 0)", "groupname", at),
+        "net": series("topk(5, rig:net:proc:uplink_bytes_per_sec > 1024)", "groupname", at),
     }
     disk = series("topk(4, rig:disk:util_ratio > 0.01)", "device", at)
     firing = series('ALERTS{alertstate="firing"}', "alertname", at)
@@ -240,6 +263,7 @@ def cmd_why(args) -> int:
         ("io", "who is doing io (bytes/s)", None),
         ("rss", "who holds memory (proportional)", None),
         ("swap", "who is swapped out", None),
+        ("net", "who is using the internet (bytes/s)", None),
     ):
         rows = [(n, human_bytes(v) if fmt is None else fmt.format(v)) for n, v in tops[key]]
         print(rule(title))
@@ -247,6 +271,12 @@ def cmd_why(args) -> int:
         print()
     print(rule("disk"))
     print(table([(d, pct(v)) for d, v in disk], ("device", "busy")))
+    print()
+    print(rule("link"))
+    print(f"  down {human_bits(f['net_down_bits'])}   up {human_bits(f['net_up_bits'])}"
+          + (f"   {pct(f['net_saturation'])} of the line" if f["net_saturation"] else ""))
+    print(f"  round trip {ms(f['net_rtt'])}, {num(f['net_bloat'], '{:.1f}')}x its idle value,"
+          f" loss {pct(f['net_loss'])}   `rig net` for the detail")
     print()
     print(rule("thermal"))
     print(f"  cpu {num(f['cpu_c'], '{:.0f}')}C   gpu {num(f['gpu_c'], '{:.0f}')}C"
@@ -295,6 +325,22 @@ def classify(f: dict) -> tuple[str, list[str]]:
             f"load {load_pc:.1f}x cores, {io_bound * 100:.0f}% of it blocked on io.",
             "this load average is not a cpu problem.",
         ]
+    # The machine is not stalled, so nothing above fires — and the human is
+    # still waiting, because the wait is in a queue outside the box.
+    bloat = f.get("net_bloat") or 0
+    rtt = f.get("net_rtt") or 0
+    if bloat > 4 and rtt > 0.1:
+        return "LINK QUEUED — the machine is fine, the internet is waiting in line", [
+            f"round trip is {rtt * 1000:.0f}ms, {bloat:.1f}x its idle value.",
+            "something is filling the line and every other packet queues behind it.",
+            "a download speed cap does not fix this; it is the queue, not the rate.",
+            "-> topk(5, rig:net:proc:uplink_bytes_per_sec), or rig net.",
+        ]
+    if (f.get("net_saturation") or 0) > 0.85:
+        return "LINK FULL — the line is carrying everything it can", [
+            f"downlink at {(f['net_saturation']) * 100:.0f}% of what the line is sold as.",
+            "-> rig net who names the process group holding it.",
+        ]
     if cpu_busy > 0.8:
         return "BUSY — cpu working, nothing queueing badly", [
             f"cpu {cpu_busy * 100:.0f}% busy, no significant stall.",
@@ -319,6 +365,10 @@ BY = {
     "read": ("rig:proc:read_bytes_per_sec", "bytes/s read", None),
     "write": ("rig:proc:write_bytes_per_sec", "bytes/s written", None),
     "faults": ("rig:proc:major_faults_per_sec", "major faults/s (paging from disk)", "{:.1f}"),
+    "net": ("rig:net:proc:uplink_bytes_per_sec", "bytes/s to and from the internet", None),
+    "down": ("rig:net:proc:uplink_rx_bytes_per_sec", "bytes/s pulled from the internet", None),
+    "up": ("rig:net:proc:uplink_tx_bytes_per_sec", "bytes/s pushed to the internet", None),
+    "conns": ("rig:net:proc:connections", "open connections", "{:.0f}"),
     "procs": ("rig:proc:count", "process count", "{:.0f}"),
     "threads": ("rig:proc:threads", "thread count", "{:.0f}"),
     "fds": ("rig:proc:open_fds", "open file descriptors", "{:.0f}"),
@@ -458,6 +508,463 @@ def cmd_containers(args) -> int:
     print(table(out, header))
     if not args.each and out:
         print(f"\n  {len(rows)} stacks. `--each` for individual containers.")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# rig net — who is on the link, and why it feels slow
+# --------------------------------------------------------------------------
+
+NET_EXPORTER = os.environ.get("RIG_NET_EXPORTER", "http://127.0.0.1:13370")
+
+
+def _live_flows() -> dict:
+    """The connection table, read from the exporter rather than Prometheus.
+
+    Per-connection detail is deliberately never a metric — one series per
+    socket would cost more than every other reading on this machine.
+    """
+    try:
+        with urllib.request.urlopen(f"{NET_EXPORTER}/flows", timeout=TIMEOUT) as r:
+            return json.load(r)
+    except (urllib.error.URLError, OSError) as e:
+        root, _ = stack_root()
+        raise SystemExit(
+            f"rig: no net exporter at {NET_EXPORTER}: {e}\n"
+            f"  start it with:\n"
+            f"    cd {root} && docker compose up -d net-exporter\n"
+            f"  point elsewhere with RIG_NET_EXPORTER=http://host:port")
+
+
+def _net_facts(at) -> dict:
+    by_target = lambda expr: dict(series(expr, "target", at))
+    kinds = {s["metric"].get("target", "?"): s["metric"].get("kind", "?")
+             for s in query("rig:net:rtt_seconds", at)}
+    return {
+        "kinds": kinds,
+        "down_bits": scalar("rig:net:link:rx_bits_per_sec", at),
+        "up_bits": scalar("rig:net:link:tx_bits_per_sec", at),
+        "capacity_down": scalar("rig:net:link:capacity_rx_bits_per_sec", at),
+        "capacity_up": scalar("rig:net:link:capacity_tx_bits_per_sec", at),
+        "peak_down": scalar("rig:net:link:peak_rx_bits_per_sec", at),
+        "peak_up": scalar("rig:net:link:peak_tx_bits_per_sec", at),
+        "saturation": scalar("rig:net:link:rx_saturation", at),
+        "share_of_peak": scalar("rig:net:link:rx_share_of_peak", at),
+        "rtt": by_target("rig:net:rtt_seconds"),
+        "floor": by_target("rig:net:rtt_floor_seconds"),
+        "worst": by_target("rignet_probe_rtt_worst_seconds"),
+        "bloat": by_target("rig:net:bufferbloat_ratio"),
+        "loss": by_target("rig:net:loss_ratio"),
+        "retransmit_ratio": scalar("rig:net:retransmit_ratio", at),
+        "resolver": scalar("rig:net:resolver_seconds", at),
+        "established": scalar("rig:net:tcp_established", at),
+        "wifi_signal": dict(series("rig:net:wifi_signal_dbm", "device", at)),
+        "wifi_retries": dict(series("rig:net:wifi_retries_per_sec", "device", at)),
+        "attributed": scalar("rig:net:attributed_ratio", at),
+        "unattributed_bytes": scalar("rig:net:unattributed_bytes_per_sec", at),
+        "conntrack": scalar("rig:net:conntrack_available", at),
+        "age": scalar("rig:net:scrape_age_seconds", at),
+        "device": (series("rignet_default_route", "device", at) or [("?", 0)])[0][0],
+    }
+
+
+def classify_net(f: dict) -> tuple[str, list[str]]:
+    """Name what is wrong with the link. Throughput alone never answers it."""
+    if f["age"] is None:
+        return "NO DATA — the net exporter is not being scraped", [
+            "docker compose up -d net-exporter, then rig health.",
+        ]
+    if f["age"] > 120:
+        return "STALE — the net exporter stopped reporting", [
+            f"its last pass was {f['age'] / 60:.0f} minutes ago.",
+            "docker compose logs net-exporter",
+        ]
+    bloat = max(f["bloat"].values() or [0])
+    rtt = max(f["rtt"].values() or [0])
+    loss = max(f["loss"].values() or [0])
+    signal = min(f["wifi_signal"].values() or [0])
+    saturation = f["saturation"] or 0
+    share = f["share_of_peak"] or 0
+
+    # Judged per target: a gateway that answers in 1ms is 3x queued the moment
+    # it answers in 3ms, and that is noise, not a queue.
+    queued = {t: r for t, r in f["bloat"].items() if r > 4 and (f["rtt"].get(t) or 0) > 0.1}
+    if queued:
+        worst = max(queued, key=queued.get)
+        bloat = queued[worst]
+        return "QUEUED — the line is full and everything waits behind it", [
+            f"round trip to {worst} is {f['rtt'][worst] * 1000:.0f}ms against "
+            f"{f['floor'][worst] * 1000:.0f}ms idle — {bloat:.1f}x.",
+            "this is a queue, not a shortage of bandwidth. Capping a download's rate",
+            "only helps if the cap is below what the line carries; the queue is the lag.",
+        ]
+    if saturation > 0.85:
+        return "FULL — the line is carrying everything it is sold to carry", [
+            f"downlink {saturation * 100:.0f}% of {human_bits(f['capacity_down'])}.",
+        ]
+    if not f["capacity_down"] and share > 0.9 and (f["down_bits"] or 0) > 1e6:
+        return "AT ITS OWN CEILING — as fast as this line has ever gone", [
+            f"{human_bits(f['down_bits'])} down, against a 7-day best of "
+            f"{human_bits(f['peak_down'])}.",
+            "set RIG_NET_DOWN_MBIT in .env to compare against what you pay for.",
+        ]
+    if loss > 0.03:
+        gateway = [t for t in f["loss"] if f["loss"][t] > 0.03]
+        return "LOSSY — packets are not coming back", [
+            f"{loss * 100:.0f}% loss to {', '.join(gateway)}.",
+            "loss to the gateway is the radio or the cable; loss only past it is the ISP.",
+        ]
+    if -100 < signal < -72:
+        return "WEAK RADIO — the wifi link is slow before anything else is", [
+            f"{signal:.0f} dBm. The radio drops to low rates and spends its airtime retrying.",
+        ]
+    if (f["resolver"] or 0) > 1:
+        return "RESOLVER SLOW — names take longer than pages", [
+            f"{f['resolver'] * 1000:.0f}ms to turn a name into an address.",
+        ]
+    if (f["down_bits"] or 0) < 1e5 and (f["up_bits"] or 0) < 1e5:
+        return "IDLE — nothing is using the link", [
+            f"{human_bits(f['down_bits'])} down, {human_bits(f['up_bits'])} up.",
+        ]
+    return "HEALTHY — the link is busy and nothing is queueing", [
+        f"{human_bits(f['down_bits'])} down, {human_bits(f['up_bits'])} up, "
+        f"round trip {rtt * 1000:.0f}ms at {bloat:.1f}x idle.",
+    ]
+
+
+def _net_groups(at, since: str = "", agg: str = "max", top: int = 10) -> list[tuple]:
+    """Process groups ranked by what they pull off the uplink."""
+    wrap = (lambda m: f"{agg}_over_time({m}[{since}])") if since else (lambda m: m)
+    down = dict(series(f"topk({top}, {wrap('rig:net:proc:uplink_rx_bytes_per_sec')})", "groupname", at))
+    up = dict(series(wrap("rig:net:proc:uplink_tx_bytes_per_sec"), "groupname", at))
+    conns = dict(series(wrap("rig:net:proc:connections"), "groupname", at))
+    rtt = dict(series(wrap("rig:net:proc:rtt_seconds"), "groupname", at))
+    retrans = dict(series(wrap("rig:net:proc:retransmit_bytes_per_sec"), "groupname", at))
+    rows = []
+    for g in sorted(down, key=lambda k: -(down[k] + up.get(k, 0))):
+        rows.append((g, down[g], up.get(g, 0.0), conns.get(g, 0.0),
+                     rtt.get(g), retrans.get(g, 0.0)))
+    return rows
+
+
+def cmd_net(args) -> int:
+    at = args.at
+    f = _net_facts(at)
+    verdict, because = classify_net(f)
+    groups = _net_groups(at, top=args.top)
+    peers = _net_peers(at, args.top)
+
+    if args.json:
+        print(json.dumps({"verdict": verdict, "because": because, "facts": f,
+                          "groups": [dict(zip(("group", "down", "up", "connections",
+                                               "rtt", "retransmitted"), r)) for r in groups],
+                          "peers": [dict(zip(("peer", "service", "down", "up"), r))
+                                    for r in peers]}, indent=2, default=str))
+        return 0
+
+    print(f"VERDICT: {verdict}")
+    for line in because:
+        print(f"         {line}")
+    print()
+    print(rule(f"link — {f['device']}"))
+    print(f"  down {human_bytes(f['down_bits'] and f['down_bits'] / 8)}/s "
+          f"({human_bits(f['down_bits'])})"
+          f"   up {human_bytes(f['up_bits'] and f['up_bits'] / 8)}/s ({human_bits(f['up_bits'])})")
+    if f["capacity_down"]:
+        print(f"  sold as {human_bits(f['capacity_down'])} down / "
+              f"{human_bits(f['capacity_up'])} up — using {pct(f['saturation'])}")
+    else:
+        print(f"  no line speed configured. 7-day best {human_bits(f['peak_down'])} down / "
+              f"{human_bits(f['peak_up'])} up, using {pct(f['share_of_peak'])} of that")
+        print("  set RIG_NET_DOWN_MBIT and RIG_NET_UP_MBIT in .env to judge it against the plan.")
+    for device, signal in sorted(f["wifi_signal"].items()):
+        print(f"  {device} radio {signal:.0f} dBm, "
+              f"{f['wifi_retries'].get(device, 0):.1f} retries/s")
+    print(f"  {num(f['established'], '{:.0f}')} established connections, "
+          f"{pct(f['retransmit_ratio'])} of segments sent again")
+    print()
+
+    print(rule("is it queued?"))
+    print(table([(t, f["kinds"].get(t, "?"), ms(f["rtt"].get(t)), ms(f["floor"].get(t)),
+                  ms(f["worst"].get(t)), num(f["bloat"].get(t), "{:.1f}x"),
+                  pct(f["loss"].get(t)))
+                 for t in sorted(f["rtt"], key=lambda k: f["kinds"].get(k, ""))],
+                ("target", "", "now", "idle", "worst", "vs idle", "loss")))
+    print(f"  resolver {ms(f['resolver'])} to turn a name into an address")
+    print("  `vs idle` is the queue. Above 4x, interactive traffic is waiting behind a")
+    print("  bulk transfer, whatever the download rate says.")
+    print()
+
+    print(rule("who is on the internet"))
+    print(table([(g, human_bytes(d) + "/s", human_bytes(u) + "/s", f"{c:.0f}",
+                  ms(r), human_bytes(rt) + "/s") for g, d, u, c, r, rt in groups],
+                ("group", "down", "up", "conns", "worst rtt", "resent")))
+    print()
+
+    print(rule("where it goes"))
+    print(table([(p, sv, human_bytes(d) + "/s", human_bytes(u) + "/s")
+                 for p, sv, d, u in peers],
+                ("peer", "service", "down", "up")))
+    print()
+
+    print(rule("what this cannot see"))
+    print(f"  {pct(f['attributed'])} of the link's bytes have a named owner "
+          f"({human_bytes(f['unattributed_bytes'])}/s do not).")
+    if not f["conntrack"]:
+        print("  UDP — QUIC, games, video calls — carries no byte counter until conntrack")
+        print("  accounting is on:  sudo sysctl -w net.netfilter.nf_conntrack_acct=1")
+    return 0
+
+
+def _net_peers(at, top: int = 12) -> list[tuple]:
+    down = dict(series(f'topk({top}, rig:net:peer:rx_bytes_per_sec{{scope="internet"}})',
+                       "peer", at))
+    up: dict[str, float] = {}
+    service: dict[str, str] = {}
+    for s in query('rig:net:peer:tx_bytes_per_sec{scope="internet"}', at):
+        peer = s["metric"].get("peer", "?")
+        up[peer] = up.get(peer, 0.0) + float(s["value"][1])
+    for s in query('rig:net:peer:rx_bytes_per_sec{scope="internet"}', at):
+        service[s["metric"].get("peer", "?")] = s["metric"].get("service", "?")
+    return [(p, service.get(p, "?"), v, up.get(p, 0.0))
+            for p, v in sorted(down.items(), key=lambda kv: -kv[1])]
+
+
+def _hostnames(addresses: list[str]) -> dict[str, str]:
+    """Reverse DNS for a handful of addresses, in parallel and never for long."""
+    import concurrent.futures
+    import socket as _socket
+
+    def one(addr: str) -> str:
+        try:
+            return _socket.gethostbyaddr(addr)[0]
+        except OSError:
+            return ""
+
+    _socket.setdefaulttimeout(1.0)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        return dict(zip(addresses, pool.map(one, addresses)))
+
+
+def cmd_net_who(args) -> int:
+    rows = _net_groups(args.at, args.since, args.agg, args.top)
+    if args.json:
+        print(json.dumps([dict(zip(("group", "down", "up", "connections", "rtt",
+                                    "retransmitted"), r)) for r in rows], indent=2))
+        return 0
+    window = f"{args.agg} over the last {args.since}" if args.since else "now"
+    print(f"who is using the internet — {window}")
+    print("  (rig:net:proc:uplink_rx_bytes_per_sec, internet only: bridges, VMs and the "
+          "tailnet are excluded)\n")
+    print(table([(g, human_bytes(d) + "/s", human_bytes(u) + "/s", f"{c:.0f}",
+                  ms(r), human_bytes(rt) + "/s") for g, d, u, c, r, rt in rows],
+                ("group", "down", "up", "conns", "worst rtt", "resent")))
+    return 0
+
+
+def cmd_net_peers(args) -> int:
+    rows = _net_peers(args.at, args.top)
+    names = {} if args.no_resolve else _hostnames([p for p, _, _, _ in rows if p != "other"])
+    if args.json:
+        print(json.dumps([{"peer": p, "host": names.get(p, ""), "service": s,
+                           "down": d, "up": u} for p, s, d, u in rows], indent=2))
+        return 0
+    print(f"top {len(rows)} remote addresses, internet only\n")
+    print(table([(p, names.get(p, "") or "-", s, human_bytes(d) + "/s", human_bytes(u) + "/s")
+                 for p, s, d, u in rows],
+                ("peer", "name", "service", "down", "up")))
+    print("\n  Addresses beyond the busiest are summed into `other`; raise the exporter's")
+    print("  RIG_NET_TOP_PEERS to keep more of them apart.")
+    return 0
+
+
+def cmd_net_conns(args) -> int:
+    data = _live_flows()
+    rows = data["connections"]
+    key = {"bytes": lambda r: -(r["sent"] + r["received"]),
+           "rtt": lambda r: -r["rtt"],
+           "retrans": lambda r: -r["retransmitted"]}[args.sort]
+    rows = [r for r in rows if not args.group or r["group"] == args.group]
+    rows = sorted(rows, key=key)[:args.top]
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    names = {} if args.no_resolve else _hostnames(sorted({r["peer"] for r in rows}))
+    print("live connections, this instant — counters are for the life of each socket\n")
+    print(table([(r["group"], r["pid"], names.get(r["peer"]) or r["peer"], r["service"],
+                  r["state"], human_bytes(r["received"]), human_bytes(r["sent"]),
+                  ms(r["rtt"]), ms(r["min_rtt"]), human_bytes(r["retransmitted"]))
+                 for r in rows],
+                ("group", "pid", "peer", "service", "state", "in", "out",
+                 "rtt", "idle rtt", "resent")))
+    return 0
+
+
+SPEEDTEST = os.environ.get("RIG_NET_SPEEDTEST", "https://speed.cloudflare.com")
+BLOAT_GRADES = ((1.5, "A", "the queue is short; interactive traffic survives a full link"),
+                (2.5, "B", "noticeable under load"),
+                (4.0, "C", "a call or a game degrades while anything downloads"),
+                (8.0, "D", "everything lags whenever the line is busy"),
+                (1e9, "F", "the router queues seconds of traffic; nothing interactive works"))
+
+
+def _fill(url: str, seconds: float, upload: bool, streams: int = 4) -> tuple[float, float]:
+    """Move as much as fits in `seconds`, and report bytes/s and the window.
+
+    Several connections at once, because one TCP stream on a lossy or
+    long-latency path reports the stream's ceiling and not the line's.
+    """
+    import threading
+
+    chunk = 1 << 20
+    block = os.urandom(chunk) * 8
+    # The default python User-Agent is refused by the endpoint serving this.
+    opener = urllib.request.build_opener()
+    opener.addheaders = [("User-Agent", "rig-telemetry")]
+    moved = [0] * streams
+    started = time.monotonic()
+    deadline = started + seconds
+
+    def worker(slot: int):
+        while time.monotonic() < deadline:
+            try:
+                if upload:
+                    req = urllib.request.Request(
+                        url, data=block, method="POST",
+                        headers={"Content-Type": "application/octet-stream"})
+                    with opener.open(req, timeout=seconds * 2) as r:
+                        r.read()
+                    moved[slot] += len(block)
+                else:
+                    with opener.open(url, timeout=seconds * 2) as r:
+                        while time.monotonic() < deadline:
+                            part = r.read(chunk)
+                            if not part:
+                                break
+                            moved[slot] += len(part)
+            except OSError:
+                return
+
+    threads = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(streams)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    spent = time.monotonic() - started
+    return sum(moved) / max(spent, 1e-6), spent
+
+
+def _rtt_during(spent: float) -> tuple[float | None, float | None]:
+    """What the exporter's probe saw while the line was full."""
+    window = f"{max(15, int(spent) + 5)}s"
+    return (scalar(f'max(max_over_time(rig:net:rtt_seconds{{kind="internet"}}[{window}]))'),
+            scalar(f'max(max_over_time(rig:net:loss_ratio[{window}]))'))
+
+
+def cmd_net_speedtest(args) -> int:
+    """Fill the line on purpose, and measure what that does to everything else.
+
+    A throughput figure alone is the least useful half of this. The other half
+    is the round trip time while those bytes are moving: that is the number
+    that decides whether a call survives a download, and no speed test that
+    reports megabits alone will ever show it.
+    """
+    idle = scalar('min(rig:net:rtt_floor_seconds{kind="internet"})')
+    if idle is None:
+        print("rig: no idle round trip time recorded yet — start the net exporter first.",
+              file=sys.stderr)
+        return 2
+    size = 50_000_000                        # the endpoint refuses more in one request
+    print(f"filling the line from {SPEEDTEST} for {args.seconds:g}s each way. "
+          f"Everything on this machine will feel it.\n")
+
+    down, down_spent = _fill(f"{SPEEDTEST}/__down?bytes={size}", args.seconds, upload=False)
+    down_rtt, down_loss = _rtt_during(down_spent)
+    up = up_spent = up_rtt = up_loss = None
+    if not args.down_only:
+        up, up_spent = _fill(f"{SPEEDTEST}/__up", args.seconds, upload=True)
+        up_rtt, up_loss = _rtt_during(up_spent)
+
+    grade = lambda r: next(g for limit, g, _ in BLOAT_GRADES if r < limit) if r else "?"
+    why = lambda r: next(w for limit, _, w in BLOAT_GRADES if r < limit) if r else ""
+    down_ratio = (down_rtt / idle) if down_rtt else None
+    up_ratio = (up_rtt / idle) if up_rtt else None
+    worst = max(r for r in (down_ratio, up_ratio) if r is not None)
+
+    if args.json:
+        print(json.dumps({
+            "idle_rtt_seconds": idle,
+            "download": {"bytes_per_sec": down, "bits_per_sec": down * 8,
+                         "rtt_seconds": down_rtt, "rtt_ratio": down_ratio, "loss": down_loss},
+            "upload": {"bytes_per_sec": up, "bits_per_sec": up and up * 8,
+                       "rtt_seconds": up_rtt, "rtt_ratio": up_ratio, "loss": up_loss},
+            "bufferbloat_grade": grade(worst),
+        }, indent=2))
+        return 0
+
+    print(rule("throughput"))
+    rows = [("download", human_bytes(down) + "/s", human_bits(down * 8),
+             ms(down_rtt), num(down_ratio, "{:.1f}x"), pct(down_loss))]
+    if up:
+        rows.append(("upload", human_bytes(up) + "/s", human_bits(up * 8),
+                     ms(up_rtt), num(up_ratio, "{:.1f}x"), pct(up_loss)))
+    print(table(rows, ("direction", "rate", "", "rtt while full", "vs idle", "loss")))
+    print(f"  idle round trip {ms(idle)}")
+    print()
+    print(rule(f"bufferbloat: {grade(worst)}"))
+    print(f"  {why(worst)}.")
+    print(f"  Round trip went from {ms(idle)} idle to {ms(max(r for r in (down_rtt, up_rtt) if r))}"
+          f" with the line full — {worst:.1f}x.")
+    print("  This is a router queue, not a bandwidth shortage. A download speed cap only")
+    print("  helps while it holds the line below full; SQM (fq_codel or cake) on the")
+    print("  router fixes it at any rate.")
+    print()
+    print(rule("what to put in .env"))
+    print(f"  RIG_NET_DOWN_MBIT={down * 8 / 1e6:.0f}")
+    if up:
+        print(f"  RIG_NET_UP_MBIT={up * 8 / 1e6:.0f}")
+    print("  then: docker compose up -d net-exporter")
+    print("  Measured over one short run on a link that had other traffic on it, so round")
+    print("  these up to what the line is sold as if you know the figure.")
+    return 0
+
+
+def cmd_net_doctor(args) -> int:
+    """What this can see, what it cannot, and the one line that fixes the gap."""
+    data = _live_flows()
+    f = _net_facts(args.at)
+    sockets = dict(series("rignet_sockets", "proto", args.at))
+    source = query("rignet_groups_source", args.at)
+    rows = [
+        ("net exporter", "up" if (f["age"] or 1e9) < 120 else "STALE",
+         f"last pass {num(f['age'], '{:.0f}')}s ago"),
+        ("tcp sockets", f"{sockets.get('tcp', 0):.0f}", "counters, rtt and retransmits, exact"),
+        ("udp sockets", f"{sockets.get('udp', 0):.0f}",
+         "owners only — the kernel counts no bytes per udp socket"),
+        ("conntrack accounting", "on" if f["conntrack"] else "OFF",
+         data["conntrack"]["reason"] or "udp bytes have an owner"),
+        ("attributed", pct(f["attributed"]),
+         f"{human_bytes(f['unattributed_bytes'])}/s of link traffic has no owner"),
+        ("group names", "process-exporter" if source and float(source[0]["value"][1])
+         else "comm only", source[0]["metric"].get("path", "") if source else ""),
+        ("line speed", human_bits(f["capacity_down"]) if f["capacity_down"] else "not set",
+         "RIG_NET_DOWN_MBIT / RIG_NET_UP_MBIT in .env"),
+        ("ping targets", ", ".join(sorted(f["rtt"])) or "none",
+         "RIG_NET_PING_TARGETS in .env"),
+    ]
+    if args.json:
+        print(json.dumps([dict(zip(("check", "state", "detail"), r)) for r in rows], indent=2))
+        return 0
+    print(table(rows, ("check", "state", "detail")))
+    print()
+    if not f["conntrack"]:
+        print("  Every UDP byte is unattributed, and QUIC is UDP — a browser reading video")
+        print("  can be the busiest thing on the link and appear idle here. Give it an owner:")
+        print("    sudo sysctl -w net.netfilter.nf_conntrack_acct=1")
+        print("    echo net.netfilter.nf_conntrack_acct=1 | sudo tee /etc/sysctl.d/99-rig-net.conf")
+    print("  Sockets are sampled, so a connection that opens and closes between two passes")
+    print("  is never seen. `attributed` is the size of that gap, measured against the")
+    print("  interface's own counters. docs/network.md")
     return 0
 
 
@@ -1488,6 +1995,38 @@ def main() -> int:
     s.add_argument("--since", metavar="DUR", help="aggregate over a window instead of now")
     s.add_argument("--agg", choices=["avg", "max"], default="max")
     s.set_defaults(fn=cmd_containers)
+
+    s = sub.add_parser("net", help="who is using the link, and why it feels slow")
+    s.add_argument("--top", type=int, default=10)
+    s.set_defaults(fn=cmd_net)
+    net = s.add_subparsers(dest="netcmd",
+                           parser_class=lambda **kw: argparse.ArgumentParser(parents=[common], **kw))
+
+    n = net.add_parser("who", help="process groups ranked by internet traffic")
+    n.add_argument("--top", type=int, default=15)
+    n.add_argument("--since", metavar="DUR", help="aggregate over a window instead of now")
+    n.add_argument("--agg", choices=["avg", "max"], default="max")
+    n.set_defaults(fn=cmd_net_who)
+
+    n = net.add_parser("peers", help="the addresses the traffic goes to")
+    n.add_argument("--top", type=int, default=15)
+    n.add_argument("--no-resolve", action="store_true", help="skip reverse DNS")
+    n.set_defaults(fn=cmd_net_peers)
+
+    n = net.add_parser("conns", help="every live connection, with its round trip time")
+    n.add_argument("--top", type=int, default=25)
+    n.add_argument("--sort", choices=["bytes", "rtt", "retrans"], default="bytes")
+    n.add_argument("--group", help="only this process group")
+    n.add_argument("--no-resolve", action="store_true", help="skip reverse DNS")
+    n.set_defaults(fn=cmd_net_conns)
+
+    n = net.add_parser("speedtest", help="fill the line, and measure the queue that makes")
+    n.add_argument("--seconds", type=float, default=10, help="how long to hold each direction")
+    n.add_argument("--down-only", action="store_true", help="skip the upload half")
+    n.set_defaults(fn=cmd_net_speedtest)
+
+    n = net.add_parser("doctor", help="what is measured, what is missing, and how to fix it")
+    n.set_defaults(fn=cmd_net_doctor)
 
     s = sub.add_parser("thermals", help="temperatures and cooling degradation vs baseline")
     s.set_defaults(fn=cmd_thermals)

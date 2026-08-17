@@ -93,6 +93,42 @@ services:
     labels:
       org.label-schema.group: "rig-telemetry"
 
+  # Who is on the link. The kernel counts bytes per interface and never per
+  # process, so this reads each socket's own counters over netlink and maps
+  # them back through /proc/<pid>/fd to the group process-exporter would name.
+  # It pings the gateway beside that, because a full link is not slow: it is
+  # queued, and only round-trip time under load says so. docs/network.md.
+  net-exporter:
+    image: python:3.14-alpine
+    container_name: rig-net-exporter
+    network_mode: host
+    pid: host
+    # Socket counters, other users' file descriptors and an ICMP socket are
+    # all root's to read.
+    privileged: true
+    restart: unless-stopped
+    environment:
+      RIG_NET_PROCFS: /host/proc
+      RIG_NET_ADDR: 127.0.0.1
+      RIG_NET_PORT: "13370"
+      RIG_NET_INTERVAL: "${RIG_NET_INTERVAL:-10}"
+      RIG_NET_PING_INTERVAL: "${RIG_NET_PING_INTERVAL:-2}"
+      # Empty means the default gateway and 1.1.1.1, found at start.
+      RIG_NET_PING_TARGETS: "${RIG_NET_PING_TARGETS:-}"
+      RIG_NET_TOP_PEERS: "${RIG_NET_TOP_PEERS:-40}"
+      # What the line is sold as. Without them nothing knows when it is full.
+      RIG_NET_DOWN_MBIT: "${RIG_NET_DOWN_MBIT:-}"
+      RIG_NET_UP_MBIT: "${RIG_NET_UP_MBIT:-}"
+    volumes:
+      - ./tools:/tools:ro
+      # The same group definitions process-exporter uses, so both name a
+      # process identically and `rig:net:proc:*` joins `rig:proc:*`.
+      - ./process-exporter:/config:ro
+      - /proc:/host/proc:ro
+    command: ["python3", "/tools/net-exporter.py"]
+    labels:
+      org.label-schema.group: "rig-telemetry"
+
   # GPU: utilisation, temperature, power draw, fan, clocks, VRAM, throttling.
   # No nvidia-container-toolkit on this host, so nvidia-smi and libnvidia-ml
   # are bind-mounted straight in.

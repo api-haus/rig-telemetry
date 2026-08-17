@@ -32,6 +32,11 @@ scrape_configs:
       - targets: ['127.0.0.1:13330']
     relabel_configs: *pin_instance
 
+  - job_name: net
+    static_configs:
+      - targets: ['127.0.0.1:13370']
+    relabel_configs: *pin_instance
+
   # smartctl re-reads the drives on its own interval; scraping it faster only
   # re-serves a cached sample.
   - job_name: smart

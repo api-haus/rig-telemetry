@@ -37,10 +37,11 @@ curl -X POST http://localhost:13390/-/reload
 tools/rig health          # expect 0 failing
 ```
 
-Process groups — `process-exporter/config.yml` is read at start only:
+Process groups — `process-exporter/config.yml` is read at start only, and the
+net exporter reads the same file for the same names:
 
 ```
-docker compose restart process-exporter
+docker compose restart process-exporter net-exporter
 ```
 
 Dashboards — never edit `grafana/dashboards/*.json` by hand; they are
@@ -53,6 +54,21 @@ tools/gen-dashboards.py --check # exits 1 if the committed JSON is stale
 
 Dashboards edited in the Grafana UI are not saved back to the repo. To keep a
 UI change, port it into the generator.
+
+## Giving UDP an owner
+
+UDP carries no byte counter in the kernel's socket layer, so QUIC — most
+browser traffic — has no named owner until connection tracking counts it:
+
+```
+rig net doctor                                          # says whether it is on
+sudo sysctl -w net.netfilter.nf_conntrack_acct=1        # now
+echo net.netfilter.nf_conntrack_acct=1 | sudo tee /etc/sysctl.d/99-rig-net.conf
+```
+
+It costs 16 bytes per tracked flow. `rig:net:attributed_ratio` is the share of
+link traffic that has an owner, and it is the figure to check after turning
+this on. [network.md](network.md) has the method and the rest of the blind spot.
 
 ## The VRAM cap
 
@@ -144,7 +160,9 @@ tools/rig q 'prometheus_tsdb_head_min_time_seconds'   # write nothing at or afte
 
 **Ports.** Everything binds loopback: Grafana **13337**, Prometheus 13390,
 node-exporter 13310, process-exporter 13320, GPU 13330, SMART 13340,
-cAdvisor 13350, harness-exporter 13360. The 133xx block is deliberate: nothing
+cAdvisor 13350, harness-exporter 13360, net-exporter 13370. The net exporter
+also serves `/flows`, a live connection table that is deliberately not a
+metric. The 133xx block is deliberate: nothing
 common lives there, so the dashboard URL stays free and stable across reboots
 and other software.
 

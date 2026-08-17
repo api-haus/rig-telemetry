@@ -20,6 +20,7 @@ every question a human asks is answered by it or by one more command below.
 | --- | --- |
 | `rig why` | What is wrong right now, and who caused it |
 | `rig who --by <dimension>` | Who is using a resource |
+| `rig net` | Who is using the internet, and whether the link is full or queued |
 | `rig timeline --since 24h` | When load spiked, and which group owned each spike |
 | `rig thermals` | Temperatures, and whether cooling has degraded |
 | `rig ai` | What the AI coding harnesses used, at API list prices |
@@ -40,7 +41,8 @@ One tool sits outside `rig` because it acts instead of reporting:
 is refused instead of the compositor. `docs/vram.md`.
 
 Dimensions for `--by`: `cpu`, `blocked`, `running`, `mem`, `rss`, `swap`, `io`,
-`read`, `write`, `faults`, `procs`, `threads`, `fds`, `switches`.
+`read`, `write`, `faults`, `procs`, `threads`, `fds`, `switches`, `net`, `down`,
+`up`, `conns`.
 
 ## Read this before you diagnose a load average
 
@@ -66,9 +68,36 @@ the machine is stopped, not slow.
    parallelism before blaming the disk.
 3. If it says **IO STALL**: `rig who --by blocked`, then `rig who --by io`.
 4. If it says **CPU SATURATED**: `rig who --by cpu`.
-5. If it says **HEALTHY** but the human disagrees, they are describing the past.
+5. If it says **LINK QUEUED** or **LINK FULL**: the machine is idle and the wait
+   is outside it. `rig net`, then `rig net who`.
+6. If it says **HEALTHY** but the human disagrees, they are describing the past.
    Use `rig timeline --since 24h --min-load 2` to find the spike, then
-   `rig why --at <that timestamp>`.
+   `rig why --at <that timestamp>`. If they are describing the internet rather
+   than the machine, `rig net` is the command, not `rig why`.
+
+## Read this before you blame the internet on bandwidth
+
+A link is never slow, it is full — and a full link delivers its bytes at the
+same rate while every interactive packet waits behind them. Throughput cannot
+show that. Round-trip time against its own idle value can:
+
+```
+rig q 'rig:net:bufferbloat_ratio'   # above 4, the lag is a queue, not a rate
+rig q 'rig:net:link:rx_saturation'  # empty until RIG_NET_DOWN_MBIT is set
+```
+
+So a download capped below the line speed still lags everything, and raising or
+lowering that cap is not the fix. Say so before proposing one.
+
+`rig net` prints the verdict, the queue and the process groups on the link.
+`rig net speedtest` fills the line on purpose and grades the queue it makes.
+
+Two blind spots, both measured rather than assumed. UDP carries no byte counter
+in the kernel's socket layer, so QUIC is unattributed until
+`net.netfilter.nf_conntrack_acct=1` is on; and sockets are sampled, so a
+connection shorter than one pass is never seen. `rig:net:attributed_ratio` is
+the size of both. Quote it whenever you name a top talker, and run
+`rig net doctor` before concluding that something is idle.
 
 ## Read this before you quote an AI cost
 
@@ -113,6 +142,8 @@ The five groups:
   `rig:fs:*` — machine state.
 - `rig:proc:*` and `rig:container:*` — attribution, keyed by `groupname` /
   `name`. **This is the "who" namespace.**
+- `rig:net:*` — the link, its queue, and who is on it. `rig:net:proc:*` is keyed
+  by the same `groupname`.
 - `rig:temp_celsius`, `rig:fan_rpm`, `rig:*_celsius` — sensors, by name.
 - `rig:thermal:*` — derived cooling health, including the degradation ratios.
 - `rig:ai:*` — harness spend, keyed by `harness`, `model`, `project`, `role`.
@@ -145,6 +176,12 @@ count_over_time(ALERTS{alertname="RigIOStall", alertstate="firing"}[30d]) * 15
 
 # when will this filesystem fill
 predict_linear(node_filesystem_avail_bytes{mountpoint="/"}[7d], 30*86400)
+
+# who is on the internet, worst minute of the last day
+topk(5, max_over_time(rig:net:proc:uplink_bytes_per_sec[24h]))
+
+# how queued the link was while that happened
+max_over_time(rig:net:bufferbloat_ratio{kind="internet"}[24h])
 
 # which end the work is stuck at: all four readings in one answer
 {__name__=~"rig:(cpu:busy_ratio|cpu:hottest_core_ratio|gpu:busy_ratio|gpu:mem_busy_ratio)"}
@@ -181,6 +218,7 @@ prometheus/rules/*.yml        recording rules (the rig: namespace) and alerts
 process-exporter/config.yml   process group definitions
 grafana/dashboards/*.json     generated — edit tools/gen-dashboards.py instead
 tools/rig                     the CLI above
+tools/net-exporter.py         per-process network attribution, ICMP probe, radio
 tools/gen-dashboards.py       dashboard generator; --check verifies freshness
 tools/harness_usage.py        one reader per AI harness, and the price lookup
 tools/harness-exporter.py     serves that to Prometheus on :13360
@@ -188,6 +226,7 @@ tools/vram-guard              the VRAM cap: install, apply, status, verify
 tools/vram-probe.py           allocates VRAM until refused; used by verify
 share/prices.tsv              model names that reach no models.dev entry
 docs/metrics.md               every series, explained
+docs/network.md               how a byte gets a name, and what bufferbloat is
 docs/ai-usage.md              harness readers, token conventions, pricing rules
 docs/thermals.md              how dust detection works and when it lies
 docs/vram.md                  why the GPU had no arbitration, and where the cap sits
