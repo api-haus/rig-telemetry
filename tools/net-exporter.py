@@ -329,6 +329,36 @@ def service_of(port: int) -> str:
     return str(port)
 
 
+def uplink_addresses(device: str) -> set[str]:
+    """Every address the uplink answers on.
+
+    A socket says which local address it uses, and that is the only honest way
+    to decide whether its bytes crossed the uplink or a container bridge.
+    """
+    found: set[str] = set()
+    if not device:
+        return found
+    try:
+        import fcntl
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            packed = fcntl.ioctl(probe.fileno(), 0x8915,
+                                 struct.pack("256s", device[:15].encode()))
+            found.add(socket.inet_ntoa(packed[20:24]))
+        finally:
+            probe.close()
+    except OSError:
+        pass
+    try:
+        for line in (PROC / "net" / "if_inet6").read_text().splitlines():
+            cols = line.split()
+            if len(cols) >= 6 and cols[-1] == device:
+                found.add(socket.inet_ntop(socket.AF_INET6, bytes.fromhex(cols[0])))
+    except (OSError, ValueError):
+        pass
+    return found
+
+
 def default_route() -> str:
     """The interface the uplink actually leaves by."""
     try:
@@ -598,6 +628,7 @@ class Counters:
         self.link = 0.0
         self.primed = False
         self.top_peers = peers
+        self.uplink: set[str] = set()
 
     def add(self, key: tuple, value: float, into: dict):
         if value > 0:
@@ -623,7 +654,7 @@ class Counters:
             service = service_of(s.rport)
             self.add((s.raddr, service, scope, "tx"), grew[0], self.peer)
             self.add((s.raddr, service, scope, "rx"), grew[1], self.peer)
-            if scope == "internet":
+            if s.laddr in self.uplink:
                 self.attributed += grew[0] + grew[1]
         for cookie in set(self.last) - seen:
             del self.last[cookie]
@@ -649,7 +680,7 @@ class Counters:
             service = service_of(dport)
             self.add((dst, service, scope, "tx"), grew[0], self.peer)
             self.add((dst, service, scope, "rx"), grew[1], self.peer)
-            if scope == "internet":
+            if src in self.uplink:
                 self.attributed += grew[0] + grew[1]
         for key in set(self.flows) - seen:
             del self.flows[key]
@@ -809,10 +840,12 @@ def render(state: dict) -> str:
          "What the line is sold as, from RIG_NET_DOWN_MBIT and RIG_NET_UP_MBIT. Unset means unknown.",
          [({"direction": d}, v) for d, v in sorted(state["capacity"].items())])
     emit("rignet_attributed_bytes_total", "counter",
-         "Bytes to and from the internet that this exporter could name an owner for.",
+         "Payload bytes on the uplink's own addresses that this exporter named an owner for.",
          [({}, counters.attributed)])
     emit("rignet_link_bytes_total", "counter",
-         "Bytes the uplink interface moved over the same period, owner or not.",
+         "Bytes the uplink interface moved over the same period, owner or not. Counts "
+         "packet headers and retransmissions, which a socket counter does not, so the two "
+         "never meet: a bulk transfer with every owner known reads about 0.95.",
          [({}, counters.link)])
 
     emit("rignet_conntrack_available", "gauge",
@@ -856,10 +889,11 @@ def collect(counters: Counters, groups: Groups, ct: Conntrack) -> tuple[dict, li
                 named[pid] = groups.of(pid)
             s.group = named[pid]
 
+    device = default_route()
+    counters.uplink = uplink_addresses(device)
     counters.sockets([s for s in tcp if s.state != "listen"])
     flows = ct.flows()
     counters.conntrack(flows, {("udp", s.lport): s.group for s in udp if s.group})
-    device = default_route()
     counters.link_traffic(device, interface_bytes())
     counters.primed = True
 

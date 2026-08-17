@@ -99,6 +99,14 @@ rig:net:attributed_ratio          # share of link bytes with a named owner
 rig:net:unattributed_bytes_per_sec
 ```
 
+Only sockets bound to the uplink's own addresses count towards it, so a
+container bridge cannot pad the figure.
+
+**This ratio never reaches 1.0.** The interface counts packet headers and
+retransmissions; a socket counts payload. A bulk transfer with every owner
+known reads about 0.95, and the rest is the frames themselves. Read 0.9 as
+"everything is named" and 0.4 as "most of this link is QUIC".
+
 Below 0.6 with conntrack accounting off, `RigNetBlindToUdp` fires and names the
 sysctl above.
 

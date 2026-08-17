@@ -179,7 +179,7 @@ average of that reads as a half-busy link that never lagged anybody.
 
 | Series | Meaning |
 | --- | --- |
-| `rig:net:attributed_ratio` | Share of the link's bytes with a named owner, against the interface's own counters |
+| `rig:net:attributed_ratio` | Share of the link's bytes with a named owner, against the interface's own counters. **Never reaches 1.0** — the interface counts headers and retransmissions, a socket counts payload, so a fully named bulk transfer reads about 0.95 |
 | `rig:net:unattributed_bytes_per_sec` | The rest, in bytes |
 | `rig:net:conntrack_available` | 0 means every UDP byte — QUIC included — is unattributed. `sysctl net.netfilter.nf_conntrack_acct=1` |
 | `rig:net:scrape_age_seconds` | Since the exporter's last pass |
