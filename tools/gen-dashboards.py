@@ -156,7 +156,7 @@ def table(L, title, queries, *, w=12, h=9, desc="", unit="short", sort_desc=True
     }, w, h)
 
 
-def bars(L, title, expr, *, unit="short", w=8, h=9, desc="", decimals=None,
+def bars(L, title, expr, *, unit="short", w=8, h=9, desc="", decimals=None, no_value=None,
          hide=("Time", "__name__", "instance", "job", "host")):
     """A ranked list. Reads better than a pie for "who spent the most"."""
     # One frame per series comes back in label order, and a bar gauge draws
@@ -174,6 +174,7 @@ def bars(L, title, expr, *, unit="short", w=8, h=9, desc="", decimals=None,
             "unit": unit, "decimals": decimals,
             "color": {"mode": "continuous-BlPu"},
             "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": None}]},
+            **({"noValue": no_value} if no_value else {}),
         }, "overrides": []},
         "options": {"displayMode": "gradient", "orientation": "horizontal",
                     "showUnfilled": True, "valueMode": "color",
@@ -625,12 +626,26 @@ def network():
        desc="The uplink is usually the smaller pipe, and filling it queues the "
             "acknowledgements every download depends on. A backup or a sync client here "
             "slows a machine that is downloading nothing.")
+    ts(L, "By container", [
+        ("topk(8, rig:net:container:rx_bytes_per_sec)", "{{name}} down"),
+        ("topk(8, rig:net:container:tx_bytes_per_sec)", "{{name}} up"),
+    ], unit="Bps", w=12,
+       no_value="No container has a network namespace of its own — every one of them is on "
+                "the host's stack, and its traffic is already named by process above.",
+       desc="A container with its own network namespace keeps its sockets there, where the "
+            "socket reader cannot see them, so these come from cAdvisor instead. Containers "
+            "on the host's network are excluded: their traffic is the host's and is already "
+            "counted by process.")
     ts(L, "Link against what has an owner", [
         ("rate(rignet_link_bytes_total[5m])", "the interface counted"),
         ("rate(rignet_attributed_bytes_total[5m])", "attributed to a group"),
     ], unit="Bps", w=12,
        desc="The gap is UDP with no conntrack accounting plus connections that opened and "
             "closed between two samples. Measured, not assumed.")
+    bars(L, "By compose stack", "topk(8, rig:net:stack:bytes_per_sec)", unit="Bps", w=12,
+         no_value="No compose stack has its own network namespace.",
+         desc="One `docker compose up` is one unit of intent, and a download client usually "
+              "sits inside one.")
     bars(L, "Total by process group",
          'topk(12, sum by (groupname) (rignet_proc_received_bytes_total{scope="internet"})'
          ' + sum by (groupname) (rignet_proc_sent_bytes_total{scope="internet"}))',

@@ -91,6 +91,21 @@ whether it is on.
 and closes between two passes is never seen. That mostly means short HTTP
 requests, which move little.
 
+**A container with its own network namespace keeps its sockets there**, and the
+reader runs in the host's namespace, so it cannot see them at all. cAdvisor
+reads each namespace's own counters instead:
+
+```
+rig:net:container:rx_bytes_per_sec   # by container
+rig:net:stack:bytes_per_sec          # by compose project
+```
+
+`rig net` prints them in their own table, because they are not in the process
+groups above and their peers are not in the peer table. Containers on the
+host's network are excluded from these series — every interface they report is
+the host's own, so nine of them would each claim the whole machine's traffic,
+and their sockets are already named by process.
+
 Both gaps are measured rather than argued away. The exporter reads the
 interface's own counters over the same period and reports the difference:
 
@@ -99,15 +114,16 @@ rig:net:attributed_ratio          # share of link bytes with a named owner
 rig:net:unattributed_bytes_per_sec
 ```
 
-Only sockets bound to the uplink's own addresses count towards it, so a
-container bridge cannot pad the figure.
+The numerator counts sockets bound to the uplink's own addresses, plus what
+cAdvisor saw each container's namespace move. A container bridge cannot pad it.
 
-**This ratio never reaches 1.0, and it only means anything under load.** The
-interface counts packet headers and retransmissions; a socket counts payload.
-A bulk transfer with every owner known reads about 0.95. On a quiet link the
-traffic is acknowledgements and keepalives, whose headers outweigh their
-payload, and the same healthy machine reads 0.4. Judge it while the line is
-busy — which is what `RigNetBlindToUdp` does before it fires.
+**Read it under load only.** The interface counts packet headers and
+retransmissions; a socket counts payload. A host-side bulk transfer with every
+owner known reads about 0.95, and a container-side one closer to 1.0, because
+cAdvisor counts frames as well. On a quiet link the traffic is acknowledgements
+and keepalives, whose headers outweigh their payload, and the same healthy
+machine reads 0.4. Judge it while the line is busy — which is what
+`RigNetBlindToUdp` does before it fires.
 
 Below 0.6 with conntrack accounting off, `RigNetBlindToUdp` fires and names the
 sysctl above.

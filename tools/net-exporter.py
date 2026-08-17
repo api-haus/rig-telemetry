@@ -300,8 +300,8 @@ def scope_of(addr: str) -> str:
         low = addr.lower()
         if low in ("::1", "::"):
             return "local"
-        if low.startswith(("fe80", "fc", "fd")):
-            return "private"
+        if low.startswith(("fe80", "fc", "fd", "ff")):
+            return "private"          # link-local, unique-local, and multicast
         return "internet"
     try:
         a, b, *_ = (int(p) for p in addr.split("."))
@@ -309,6 +309,10 @@ def scope_of(addr: str) -> str:
         return "internet"
     if a in (0, 127):
         return "local"
+    # mDNS, SSDP and every other discovery protocol lives here and never
+    # leaves the house, so it must not read as traffic on the uplink.
+    if a >= 224 or addr == "255.255.255.255":
+        return "private"
     if a == 10 or (a == 192 and b == 168) or (a == 172 and 16 <= b <= 31):
         return "private"
     if (a == 169 and b == 254) or (a == 100 and 64 <= b <= 127):
@@ -389,10 +393,13 @@ class Conntrack:
         r"src=\S+\s+dst=\S+\s+sport=\d+\s+dport=\d+"
         r"(?:\s+packets=(\d+)\s+bytes=(\d+))?")
 
+    RETRY = 60.0
+
     def __init__(self):
         self.path = PROC / "net" / "nf_conntrack"
         self.acct = PROC / "sys" / "net" / "netfilter" / "nf_conntrack_acct"
         self.reason = ""
+        self.checked = time.monotonic()
         self.available = self._probe()
 
     def _probe(self) -> bool:
@@ -416,6 +423,10 @@ class Conntrack:
     def flows(self, limit: int = 40000) -> list[tuple]:
         """(proto, src, sport, dst, dport, bytes_out, bytes_in) per live flow."""
         if not self.available:
+            # Someone turning the sysctl on should not have to restart this.
+            if time.monotonic() - self.checked > self.RETRY:
+                self.checked = time.monotonic()
+                self.available = self._probe()
             return []
         out = []
         try:
@@ -673,6 +684,11 @@ class Counters:
                 continue
             grew = ((out_bytes, in_bytes) if was is None or out_bytes < was[0]
                     else (out_bytes - was[0], in_bytes - was[1]))
+            # conntrack records a flow from whichever end opened it. When that
+            # end was not this machine, the local port is the destination one.
+            if (proto, sport) not in owners and (proto, dport) in owners:
+                src, sport, dst, dport = dst, dport, src, sport
+                grew = (grew[1], grew[0])
             group = owners.get((proto, sport), "unattributed")
             scope = scope_of(dst)
             self.add((group, "udp", scope, "tx"), grew[0], self.proc)
@@ -893,7 +909,8 @@ def collect(counters: Counters, groups: Groups, ct: Conntrack) -> tuple[dict, li
     counters.uplink = uplink_addresses(device)
     counters.sockets([s for s in tcp if s.state != "listen"])
     flows = ct.flows()
-    counters.conntrack(flows, {("udp", s.lport): s.group for s in udp if s.group})
+    counters.conntrack(flows, {("udp", s.lport): s.group for s in udp
+                               if s.group != "unattributed"})
     counters.link_traffic(device, interface_bytes())
     counters.primed = True
 

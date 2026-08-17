@@ -51,6 +51,24 @@ install. Full list in [docs/runbook.md](docs/runbook.md).
 Set `GF_ADMIN_USER` / `GF_ADMIN_PASSWORD` in a `.env` beside the compose file
 to change the login.
 
+## What this needs from the host
+
+Everything else is inside the compose file. These are the changes that live
+outside it, on the machine itself — each with the command that says whether it
+is in place. Nothing here is required for the stack to start; each one closes
+a specific blind spot.
+
+| Change | Without it | Apply | Check |
+| --- | --- | --- | --- |
+| `net.netfilter.nf_conntrack_acct=1` | Every UDP byte is unattributed, and QUIC is UDP | `echo net.netfilter.nf_conntrack_acct=1 \| sudo tee /etc/sysctl.d/99-rig-net.conf && sudo sysctl -w net.netfilter.nf_conntrack_acct=1` | `rig net doctor` |
+| `RIG_NET_DOWN_MBIT` / `RIG_NET_UP_MBIT` in `.env` | Nothing can say the link is full, only that it is busy | `rig net speedtest` prints both lines | `rig net doctor` |
+| The VRAM cap | A GPU client that fills the card takes the compositor with it | `sudo tools/vram-guard install` | `tools/vram-guard status` |
+| The systemd unit | The stack does not come back after `docker compose down` | `sudo tools/install-systemd.sh` | `systemctl is-enabled rig-telemetry` |
+| `NVIDIA_LIB_DIR` in `.env`, off Arch | The GPU exporter cannot load `libnvidia-ml.so` | [docs/adapting.md](docs/adapting.md) | `rig health` |
+
+`sysctl -w` alone lasts until the next reboot; the file beside it is what makes
+it stick. `rig net doctor` reports both.
+
 ## What it records
 
 | Source | Covers |

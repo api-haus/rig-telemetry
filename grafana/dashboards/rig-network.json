@@ -772,6 +772,89 @@
     },
     {
       "type": "timeseries",
+      "title": "By container",
+      "description": "A container with its own network namespace keeps its sockets there, where the socket reader cannot see them, so these come from cAdvisor instead. Containers on the host's network are excluded: their traffic is the host's and is already counted by process.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(8, rig:net:container:rx_bytes_per_sec)",
+          "legendFormat": "{{name}} down",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "topk(8, rig:net:container:tx_bytes_per_sec)",
+          "legendFormat": "{{name}} up",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "axisSoftMax": null
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": null,
+          "max": null,
+          "noValue": "No container has a network namespace of its own \u2014 every one of them is on the host's stack, and its traffic is already named by process above."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "id": 13
+    },
+    {
+      "type": "timeseries",
       "title": "Link against what has an owner",
       "description": "The gap is UDP with no conntrack accounting plus connections that opened and closed between two samples. Measured, not assumed.",
       "datasource": {
@@ -847,10 +930,102 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 14
       },
-      "id": 13
+      "id": 14
+    },
+    {
+      "type": "bargauge",
+      "title": "By compose stack",
+      "description": "One `docker compose up` is one unit of intent, and a download client usually sits inside one.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(8, rig:net:stack:bytes_per_sec)",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": false,
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "host": true
+            },
+            "renameByName": {},
+            "indexByName": {}
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "decimals": null,
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "No compose stack has its own network namespace."
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        }
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "id": 15
     },
     {
       "type": "bargauge",
@@ -939,21 +1114,21 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 14
+        "y": 22
       },
-      "id": 14
+      "id": 16
     },
     {
       "type": "row",
       "title": "Is it queued?",
       "collapsed": false,
-      "id": 15,
+      "id": 17,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 31
       }
     },
     {
@@ -1034,9 +1209,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 24
+        "y": 32
       },
-      "id": 16
+      "id": 18
     },
     {
       "type": "timeseries",
@@ -1112,9 +1287,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 24
+        "y": 32
       },
-      "id": 17
+      "id": 19
     },
     {
       "type": "timeseries",
@@ -1194,9 +1369,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 40
       },
-      "id": 18
+      "id": 20
     },
     {
       "type": "timeseries",
@@ -1265,21 +1440,21 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 40
       },
-      "id": 19
+      "id": 21
     },
     {
       "type": "row",
       "title": "Where it goes",
       "collapsed": false,
-      "id": 20,
+      "id": 22,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 48
       }
     },
     {
@@ -1369,9 +1544,9 @@
         "h": 9,
         "w": 8,
         "x": 0,
-        "y": 41
+        "y": 49
       },
-      "id": 21
+      "id": 23
     },
     {
       "type": "bargauge",
@@ -1460,9 +1635,9 @@
         "h": 9,
         "w": 8,
         "x": 8,
-        "y": 41
+        "y": 49
       },
-      "id": 22
+      "id": 24
     },
     {
       "type": "bargauge",
@@ -1551,9 +1726,9 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 41
+        "y": 49
       },
-      "id": 23
+      "id": 25
     },
     {
       "type": "timeseries",
@@ -1626,9 +1801,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 50
+        "y": 58
       },
-      "id": 24
+      "id": 26
     },
     {
       "type": "table",
@@ -1699,21 +1874,21 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 50
+        "y": 58
       },
-      "id": 25
+      "id": 27
     },
     {
       "type": "row",
       "title": "The link itself",
       "collapsed": false,
-      "id": 26,
+      "id": 28,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 59
+        "y": 67
       }
     },
     {
@@ -1783,9 +1958,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 60
+        "y": 68
       },
-      "id": 27
+      "id": 29
     },
     {
       "type": "timeseries",
@@ -1854,9 +2029,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 60
+        "y": 68
       },
-      "id": 28
+      "id": 30
     },
     {
       "type": "timeseries",
@@ -1926,9 +2101,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 68
+        "y": 76
       },
-      "id": 29
+      "id": 31
     },
     {
       "type": "timeseries",
@@ -1998,9 +2173,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 68
+        "y": 76
       },
-      "id": 30
+      "id": 32
     },
     {
       "type": "timeseries",
@@ -2080,9 +2255,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 68
+        "y": 76
       },
-      "id": 31
+      "id": 33
     },
     {
       "type": "timeseries",
@@ -2162,9 +2337,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 76
+        "y": 84
       },
-      "id": 32
+      "id": 34
     },
     {
       "type": "timeseries",
@@ -2233,9 +2408,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 76
+        "y": 84
       },
-      "id": 33
+      "id": 35
     }
   ],
   "templating": {

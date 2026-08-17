@@ -155,6 +155,45 @@ groups:
       - record: rig:net:proc:connections
         expr: sum without (proto, state, instance, job) (rignet_proc_connections)
 
+      # --- containers ------------------------------------------------------
+      # A container with its own network namespace keeps its sockets there, and
+      # the socket reader runs in the host's, so it can never see them.
+      # cAdvisor reads the namespace's own counters instead.
+      #
+      # Host-network containers are dropped by the `unless`: every interface
+      # they report is one of the host's, because they are using the host's
+      # stack, and their traffic is already named by process. Without it, nine
+      # containers each report the whole machine's wlan0 counters.
+      - record: rig:net:container:rx_bytes_per_sec
+        expr: |
+          sum by (name) (
+            rate(container_network_receive_bytes_total{name!=""}[1m])
+            unless on (interface)
+            label_replace(rig:net:rx_bytes_per_sec, "interface", "$1", "device", "(.*)")
+          )
+
+      - record: rig:net:container:tx_bytes_per_sec
+        expr: |
+          sum by (name) (
+            rate(container_network_transmit_bytes_total{name!=""}[1m])
+            unless on (interface)
+            label_replace(rig:net:tx_bytes_per_sec, "interface", "$1", "device", "(.*)")
+          )
+
+      - record: rig:net:container:bytes_per_sec
+        expr: rig:net:container:rx_bytes_per_sec + rig:net:container:tx_bytes_per_sec
+
+      - record: rig:net:stack:bytes_per_sec
+        expr: |
+          sum by (project) (
+            (
+              rate(container_network_receive_bytes_total{project!=""}[1m])
+              + rate(container_network_transmit_bytes_total{project!=""}[1m])
+            )
+            unless on (interface)
+            label_replace(rig:net:rx_bytes_per_sec, "interface", "$1", "device", "(.*)")
+          )
+
       # --- where it goes ---------------------------------------------------
       - record: rig:net:peer:rx_bytes_per_sec
         expr: sum without (instance, job) (rate(rignet_peer_received_bytes_total[1m]))
@@ -179,16 +218,30 @@ groups:
       # passes is never seen, and UDP has no byte counter at all until
       # conntrack accounting is on. This is the size of that blind spot, not a
       # figure to be argued away.
-      - record: rig:net:attributed_ratio
+      # Sockets name the host's own traffic; cAdvisor names what a container
+      # sent from its own namespace. Both are owners, so both count.
+      - record: rig:net:owned_bytes_per_sec
         expr: |
           max(rate(rignet_attributed_bytes_total[5m]))
+          +
+          sum(
+            rate(container_network_receive_bytes_total{name!=""}[5m])
+            + rate(container_network_transmit_bytes_total{name!=""}[5m])
+            unless on (interface)
+            label_replace(rig:net:rx_bytes_per_sec, "interface", "$1", "device", "(.*)")
+          )
+          or
+          max(rate(rignet_attributed_bytes_total[5m]))
+
+      - record: rig:net:attributed_ratio
+        expr: |
+          rig:net:owned_bytes_per_sec
           / clamp_min(max(rate(rignet_link_bytes_total[5m])), 1)
 
       - record: rig:net:unattributed_bytes_per_sec
         expr: |
           clamp_min(
-            max(rate(rignet_link_bytes_total[5m]))
-            - max(rate(rignet_attributed_bytes_total[5m])),
+            max(rate(rignet_link_bytes_total[5m])) - rig:net:owned_bytes_per_sec,
             0
           )
 

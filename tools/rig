@@ -647,17 +647,29 @@ def _net_groups(at, since: str = "", agg: str = "max", top: int = 10) -> list[tu
     return rows
 
 
+def _net_containers(at, since: str = "", agg: str = "max", top: int = 8) -> list[tuple]:
+    """Containers keep their sockets in their own namespace; cAdvisor reads it."""
+    wrap = (lambda m: f"{agg}_over_time({m}[{since}])") if since else (lambda m: m)
+    down = dict(series(f"topk({top}, {wrap('rig:net:container:rx_bytes_per_sec')} > 128)",
+                       "name", at))
+    up = dict(series(wrap("rig:net:container:tx_bytes_per_sec"), "name", at))
+    return [(n, v, up.get(n, 0.0)) for n, v in sorted(down.items(), key=lambda kv: -kv[1])]
+
+
 def cmd_net(args) -> int:
     at = args.at
     f = _net_facts(at)
     verdict, because = classify_net(f)
     groups = _net_groups(at, top=args.top)
+    containers = _net_containers(at, top=args.top)
     peers = _net_peers(at, args.top)
 
     if args.json:
         print(json.dumps({"verdict": verdict, "because": because, "facts": f,
                           "groups": [dict(zip(("group", "down", "up", "connections",
                                                "rtt", "retransmitted"), r)) for r in groups],
+                          "containers": [dict(zip(("container", "down", "up"), r))
+                                         for r in containers],
                           "peers": [dict(zip(("peer", "service", "down", "up"), r))
                                     for r in peers]}, indent=2, default=str))
         return 0
@@ -700,6 +712,14 @@ def cmd_net(args) -> int:
                   ms(r), human_bytes(rt) + "/s") for g, d, u, c, r, rt in groups],
                 ("group", "down", "up", "conns", "worst rtt", "resent")))
     print()
+
+    if containers:
+        print(rule("containers, which keep their sockets out of reach"))
+        print(table([(n, human_bytes(d) + "/s", human_bytes(u) + "/s")
+                     for n, d, u in containers], ("container", "down", "up")))
+        print("  Counted by cAdvisor inside each network namespace, so these are not in the")
+        print("  group table above and not in the peer table below.")
+        print()
 
     print(rule("where it goes"))
     print(table([(p, sv, human_bytes(d) + "/s", human_bytes(u) + "/s")
@@ -748,9 +768,13 @@ def _hostnames(addresses: list[str]) -> dict[str, str]:
 
 def cmd_net_who(args) -> int:
     rows = _net_groups(args.at, args.since, args.agg, args.top)
+    containers = _net_containers(args.at, args.since, args.agg, args.top)
     if args.json:
-        print(json.dumps([dict(zip(("group", "down", "up", "connections", "rtt",
-                                    "retransmitted"), r)) for r in rows], indent=2))
+        print(json.dumps({
+            "groups": [dict(zip(("group", "down", "up", "connections", "rtt",
+                                 "retransmitted"), r)) for r in rows],
+            "containers": [dict(zip(("container", "down", "up"), r)) for r in containers],
+        }, indent=2))
         return 0
     window = f"{args.agg} over the last {args.since}" if args.since else "now"
     print(f"who is using the internet — {window}")
@@ -759,6 +783,11 @@ def cmd_net_who(args) -> int:
     print(table([(g, human_bytes(d) + "/s", human_bytes(u) + "/s", f"{c:.0f}",
                   ms(r), human_bytes(rt) + "/s") for g, d, u, c, r, rt in rows],
                 ("group", "down", "up", "conns", "worst rtt", "resent")))
+    if containers:
+        print()
+        print("containers, counted inside their own network namespace\n")
+        print(table([(n, human_bytes(d) + "/s", human_bytes(u) + "/s")
+                     for n, d, u in containers], ("container", "down", "up")))
     return 0
 
 
@@ -929,6 +958,22 @@ def cmd_net_speedtest(args) -> int:
     return 0
 
 
+def _sysctl_persisted(key: str = "nf_conntrack_acct") -> bool:
+    """Whether a sysctl is written down anywhere, not merely set right now."""
+    files = [pathlib.Path("/etc/sysctl.conf")]
+    for folder in ("/etc/sysctl.d", "/run/sysctl.d", "/usr/lib/sysctl.d"):
+        files += sorted(pathlib.Path(folder).glob("*.conf")) if pathlib.Path(folder).is_dir() else []
+    for path in files:
+        try:
+            for line in path.read_text().splitlines():
+                line = line.split("#")[0].strip()
+                if key in line and line.endswith("1"):
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 def cmd_net_doctor(args) -> int:
     """What this can see, what it cannot, and the one line that fixes the gap."""
     data = _live_flows()
@@ -943,6 +988,10 @@ def cmd_net_doctor(args) -> int:
          "owners only — the kernel counts no bytes per udp socket"),
         ("conntrack accounting", "on" if f["conntrack"] else "OFF",
          data["conntrack"]["reason"] or "udp bytes have an owner"),
+        ("  survives a reboot", "yes" if _sysctl_persisted() else "no",
+         "sysctl -w lasts until the next boot; /etc/sysctl.d/ is what makes it stick"),
+        ("containers", f"{len(_net_containers(args.at, top=99))} with their own namespace",
+         "counted by cAdvisor — their sockets are out of the host's reach"),
         ("attributed", pct(f["attributed"]),
          f"{human_bytes(f['unattributed_bytes'])}/s of link traffic has no owner"),
         ("group names", "process-exporter" if source and float(source[0]["value"][1])

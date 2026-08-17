@@ -55,6 +55,18 @@ bridges, VMs and the tailnet are excluded, because none of them touch the line.
 Groups are the same ones every other `rig` answer uses, defined in
 `process-exporter/config.yml`.
 
+**A container in its own network namespace is not in that table.** Its sockets
+live where the host-side reader cannot see them, so they are counted separately
+and `rig net` prints them under their own heading:
+
+```
+rig q 'topk(5, rig:net:container:bytes_per_sec)'
+rig q 'topk(5, rig:net:stack:bytes_per_sec)'
+```
+
+A download client usually runs in one. Check both tables before naming a top
+talker.
+
 ## State the blind spot whenever you name a top talker
 
 ```

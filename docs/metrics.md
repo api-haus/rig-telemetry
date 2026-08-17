@@ -172,6 +172,8 @@ average of that reads as a half-busy link that never lagged anybody.
 | `rig:net:proc:retransmit_bytes_per_sec` | `groupname` | Bytes the kernel had to send again for this group |
 | `rig:net:proc:rtt_seconds` | `groupname` | Worst round trip among that group's established connections |
 | `rig:net:proc:connections` | `groupname` | Open connections. Hundreds means peer-to-peer or a download accelerator, and both defeat a single-connection rate cap |
+| `rig:net:container:rx_bytes_per_sec`, `:tx_bytes_per_sec`, `:bytes_per_sec` | `name` | Containers with a network namespace of their own, whose sockets the host-side reader cannot see. From cAdvisor. **Host-network containers are excluded** — they report the host's interfaces, and their traffic is already named by process |
+| `rig:net:stack:bytes_per_sec` | `project` | The same, per compose project |
 | `rig:net:peer:rx_bytes_per_sec`, `:tx_bytes_per_sec`, `:bytes_per_sec` | `peer`, `service`, `scope` | Per remote address. Beyond the busiest, addresses fold into `other` |
 | `rig:net:service_bytes_per_sec` | `service` | Named from the remote port; a number means a port nobody has agreed on |
 
@@ -179,7 +181,8 @@ average of that reads as a half-busy link that never lagged anybody.
 
 | Series | Meaning |
 | --- | --- |
-| `rig:net:attributed_ratio` | Share of the link's bytes with a named owner, against the interface's own counters. **Never reaches 1.0** — the interface counts headers and retransmissions, a socket counts payload, so a fully named bulk transfer reads about 0.95 and a quiet link reads far less. Judge it under load |
+| `rig:net:owned_bytes_per_sec` | Sockets on the uplink's addresses plus every container namespace cAdvisor watches |
+| `rig:net:attributed_ratio` | That, over the interface's own counters. The interface counts headers and retransmissions and a socket counts payload, so a fully named host-side transfer reads about 0.95 and a quiet link reads far less. **Judge it under load** |
 | `rig:net:unattributed_bytes_per_sec` | The rest, in bytes |
 | `rig:net:conntrack_available` | 0 means every UDP byte — QUIC included — is unattributed. `sysctl net.netfilter.nf_conntrack_acct=1` |
 | `rig:net:scrape_age_seconds` | Since the exporter's last pass |
