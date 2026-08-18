@@ -230,6 +230,7 @@ docs/network.md               how a byte gets a name, and what bufferbloat is
 docs/ai-usage.md              harness readers, token conventions, pricing rules
 docs/thermals.md              how dust detection works and when it lies
 docs/vram.md                  why the GPU had no arbitration, and where the cap sits
+docs/session.md               why one dead D-Bus broker logs the whole desktop out
 docs/runbook.md               operations
 ```
 

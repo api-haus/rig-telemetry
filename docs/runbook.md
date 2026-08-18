@@ -81,6 +81,29 @@ Check `status` after a kernel or NVIDIA upgrade. The cap depends on the driver
 charging the cgroup, which is a driver feature, not a kernel guarantee.
 `docs/vram.md` explains the mechanism and its limits.
 
+## When the whole desktop dies
+
+Half the applications die at once, nothing new starts, the rest go over the
+next minute. Check the session bus before the GPU — it is the cheaper test and
+it is usually the answer:
+
+```
+journalctl -b | grep -A4 'Too many open files'      # EMFILE in peer_new_with_fd
+journalctl -b | grep 'Got disconnect on API bus'    # the user manager lost the bus
+grep 'Max open files' /proc/$(pgrep -x dbus-broker | head -1)/limits
+```
+
+A broker that dies logs the session out, because uwsm supervises the compositor
+through that bus. Expect `uwsm: PID ... exited with RC 1` and `[PAM] Closing
+session` within milliseconds. Log in again at the greeter; nothing is wedged
+and a reboot buys nothing.
+
+Do not read `winedbg` process counts as a cause. A Proton game that loses its
+display spawns one per crashed process, tens of seconds after the fact.
+
+[session.md](session.md) has the mechanism, the limit, and how the three
+lookalike failures differ.
+
 ## Storage
 
 2 year retention, capped at 30 GB, whichever comes first.
