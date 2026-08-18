@@ -73,6 +73,12 @@ groups:
       - record: rig:proc:open_fds
         expr: namedprocess_namegroup_open_filedesc
 
+      # Open files against the process's own RLIMIT_NOFILE, not the machine's.
+      # A systemd user unit inherits a 1024 soft limit, so this reaches 1 while
+      # node_filefd_allocated is still near idle. docs/session.md
+      - record: rig:proc:fd_ratio
+        expr: namedprocess_namegroup_worst_fd_ratio
+
       # --- containers -----------------------------------------------------
       - record: rig:container:cpu_cores
         expr: sum by (name) (rate(container_cpu_usage_seconds_total{name!=""}[5m]))

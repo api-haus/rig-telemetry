@@ -110,6 +110,23 @@ bus — so do it while the graphical session is down, never under one.
 
 ## What pushed it over
 
+The broker holds about one socket per connected peer, and peer count follows
+the machine's process count. Measured against `node_processes_pids`, it is a
+burst and not a leak — every excursion returns to baseline:
+
+| Time | Broker fds | Processes | fds/proc |
+| --- | --- | --- | --- |
+| 08-16 19:40 | 392 | 995 | 0.39 |
+| 08-16 19:50 | 1216 | 1400 | 0.87 |
+| 08-16 20:20 | 394 | 1000 | 0.39 |
+| 08-17 00:50 | 1118 | 1117 | 1.00 |
+| 08-17 01:00 | 326 | 724 | 0.45 |
+
+Baseline is about 400 descriptors at 1000 processes. Four hundred more
+processes adds about 800 descriptors and lands near 1200, past a 1024 ceiling.
+That is the size of a Wine crash storm, so the two excursions above are the
+same event surviving at 0.995 rather than tipping.
+
 Bus connections are opened per process, so anything that spawns processes in
 bulk spends this budget. Two things did, together:
 

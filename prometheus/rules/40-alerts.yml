@@ -56,6 +56,17 @@ groups:
           summary: "VRAM {{ $value | humanizePercentage }} used — GPU clients will start dying"
           diagnose: "tools/vram-guard status — the cap on app.slice refuses an application before the compositor. docs/vram.md"
 
+      # 0.7 because the only thing to cross it in 7 days was dbus-broker, which
+      # sat at 0.995 of a 1024 soft limit for hours a day before it hit EMFILE
+      # and logged the desktop out. Next highest was citron at 0.642.
+      - alert: RigFdLimitApproaching
+        expr: rig:proc:fd_ratio > 0.7
+        for: 2m
+        labels: {severity: warning, domain: process}
+        annotations:
+          summary: "{{ $labels.groupname }} holds {{ $value | humanizePercentage }} of its own open-file limit"
+          diagnose: "grep 'Max open files' /proc/$(pgrep -x <name> | head -1)/limits. systemd user units default to 1024 soft. If this is dbus-broker, the whole graphical session dies when it tips over. docs/session.md"
+
       - alert: RigFilesystemFilling
         expr: max by (device) (rig:fs:used_ratio) > 0.90
         for: 30m
