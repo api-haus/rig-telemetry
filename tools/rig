@@ -210,6 +210,7 @@ def cmd_why(args) -> int:
         "mem_used": scalar("rig:mem:used_ratio", at),
         "swap_used": scalar("rig:mem:swap_used_bytes", at),
         "swap_rate": scalar("rig:mem:swap_pages_per_sec", at),
+        "disk_busy": scalar("max(rig:disk:util_ratio)", at),
         "cpu_c": scalar("rig:cpu_celsius", at),
         "gpu_c": scalar("rig:gpu_celsius", at),
         "gpu_headroom": scalar("rig:thermal:gpu_headroom_c", at),
@@ -296,15 +297,25 @@ def classify(f: dict) -> tuple[str, list[str]]:
     psi_cpu = f["psi_cpu"] or 0
     load_pc = f["load_per_cpu"] or 0
     io_bound = f["io_bound"] or 0
+    disk_busy = f["disk_busy"] or 0
 
-    if io_full > 0.3 and swap_rate > 2000:
+    # PSI io pressure comes from nr_iowait, and that counter drifts: this
+    # machine reads io_full near 0.4 with every disk under 6% busy and not one
+    # task in D state. Make the devices corroborate before naming a stall.
+    stalled = io_full > 0.3 and disk_busy > 0.15
+
+    # Swap page rate alone does not prove a thrash: this machine's primary swap
+    # is zram, so pages move at high rates for a CPU cost and no memory stall.
+    # Memory PSI is the evidence — it sat at 27% during a real thrash and 0.6%
+    # while a linker storm merely kept the disk busy.
+    if stalled and swap_rate > 2000 and mem_full > 0.1:
         return "MEMORY THRASH — swap is eating the disk", [
             f"the whole machine is stalled on io {io_full * 100:.0f}% of the time,",
             f"and {swap_rate:.0f} pages/s are moving through swap.",
             "the disk is busy serving memory, not work. cpu is a red herring.",
             "-> topk(5, rig:proc:major_faults_per_sec) names the process paying for it.",
         ]
-    if io_full > 0.3:
+    if stalled:
         return "IO STALL — everything is queued behind a disk", [
             f"the whole machine is stalled on io {io_full * 100:.0f}% of the time.",
             f"load is {load_pc:.1f}x cores and {io_bound * 100:.0f}% of it is blocked, not running.",
@@ -344,6 +355,14 @@ def classify(f: dict) -> tuple[str, list[str]]:
     if cpu_busy > 0.8:
         return "BUSY — cpu working, nothing queueing badly", [
             f"cpu {cpu_busy * 100:.0f}% busy, no significant stall.",
+        ]
+    if io_full > 0.3:
+        return "HEALTHY — the io stall figure is the kernel miscounting", [
+            f"io_full reads {io_full * 100:.0f}% but the busiest disk is at "
+            f"{disk_busy * 100:.0f}% and nothing is in D state.",
+            "nr_iowait drifts and never settles back to zero; PSI inherits the drift.",
+            "-> compare `awk '/procs_blocked/{print $2}' /proc/stat` against a real",
+            "   scan: ps -eo stat | awk '$1 ~ /D/' | wc -l. docs/metrics.md.",
         ]
     return "HEALTHY — nothing is saturated", [
         f"load {load_pc:.1f}x cores, cpu {cpu_busy * 100:.0f}% busy, io stall {io_full * 100:.0f}%.",

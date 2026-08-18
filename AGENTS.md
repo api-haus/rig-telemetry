@@ -26,6 +26,7 @@ every question a human asks is answered by it or by one more command below.
 | `rig ai` | What the AI coding harnesses used, at API list prices |
 | `rig containers` | Docker cost per compose stack (`--each` for containers) |
 | `rig disk` | IO, latency, capacity, drive wear |
+| `tools/rig-reclaim <path>` | What to delete when a filesystem fills, ranked by restore cost |
 | `rig alerts` | What is firing |
 | `rig health` | Whether this stack itself is working |
 | `rig q '<promql>'` | Arbitrary instant query |
@@ -56,9 +57,22 @@ rig q 'rig:load:runnable'   # wants CPU
 rig q 'rig:load:blocked'    # waiting on a disk
 ```
 
-`rig:psi:io_full` is the honest number: the fraction of time during which **no
-task on the machine** could make progress because of IO. Above 0.3 sustained,
-the machine is stopped, not slow.
+`rig:psi:io_full` is the fraction of time during which **no task on the
+machine** could make progress because of IO. Above 0.3 it *may* mean the
+machine is stopped rather than slow — but corroborate it before you believe it.
+
+PSI io pressure is derived from the kernel's `nr_iowait` tally, and that tally
+drifts: on this machine `/proc/stat` reports 2 blocked tasks while a scan of
+every task finds 0, and `io_full` sits near 0.4 with every disk under 6% busy.
+Check a device and a real D-state count before naming an IO stall:
+
+```
+rig q 'max(rig:disk:util_ratio)'                  # is any disk actually busy
+ps -eo stat | awk '$1 ~ /D/' | wc -l              # are any tasks really blocked
+```
+
+`rig why` and `RigIOStall` both apply that corroboration. A high `io_full` with
+idle disks is a miscount, not a finding.
 
 ## Decision procedure
 
@@ -144,6 +158,9 @@ The five groups:
   `name`. **This is the "who" namespace.**
 - `rig:net:*` — the link, its queue, and who is on it. `rig:net:proc:*` is keyed
   by the same `groupname`.
+- `rig:drive:*` — per-drive SMART, keyed by `serial_number`. **Not** by
+  smartctl's `device`: that label is the position a drive took in the last scan
+  and it moves between drives. `docs/metrics.md`.
 - `rig:temp_celsius`, `rig:fan_rpm`, `rig:*_celsius` — sensors, by name.
 - `rig:thermal:*` — derived cooling health, including the degradation ratios.
 - `rig:ai:*` — harness spend, keyed by `harness`, `model`, `project`, `role`.
@@ -225,7 +242,9 @@ tools/harness-exporter.py     serves that to Prometheus on :13360
 tools/vram-guard              the VRAM cap: install, apply, status, verify
 tools/vram-probe.py           allocates VRAM until refused; used by verify
 share/prices.tsv              model names that reach no models.dev entry
+tools/rig-reclaim             what to delete when a filesystem fills
 docs/metrics.md               every series, explained
+docs/reclaim.md               reclaim categories, restore costs, the two traps
 docs/network.md               how a byte gets a name, and what bufferbloat is
 docs/ai-usage.md              harness readers, token conventions, pricing rules
 docs/thermals.md              how dust detection works and when it lies
