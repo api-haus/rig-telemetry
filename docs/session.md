@@ -68,10 +68,22 @@ Waiting for processes to exit.` A pure Wayland client with no bus connection
 survives until this reaches it, which is why the desktop dies in two waves
 rather than one.
 
-Wine makes the second wave loud. A Proton game that loses its display spawns
-one `winedbg` per crashed process; the incident above produced 218 `winedbg`
-and 216 `conhost.exe` about 27 seconds **after** the session was already gone.
-They are wreckage, not cause. Read the timestamps before believing them.
+## What spends the descriptors
+
+A Wine crash storm, and it is the cause rather than the wreckage. Wine launches
+a debugger **per faulting thread**, so eleven Proton processes produced 218
+`winedbg` and 216 `conhost.exe`. Each new process opens bus connections.
+
+The 15 s process exporter aggregated to 60 s puts that storm one sample *after*
+the session death, which is wrong by about thirty seconds and inverts the
+causality. The journal at microsecond precision has it right: 219 `starting
+debugger` lines land in the 48 seconds **before** the broker failed. Order this
+class of event from the journal, never from a sampled counter.
+
+Steam does not have to be running a game. On 2026-08-18 it was servicing an
+install queue of three downloads, and `iscriptevaluator.exe` under Proton is
+what crashed — 15,751 faults on one signature,
+`000000000000036E at address 00006FFFFD277537`.
 
 ## The limit
 
@@ -127,21 +139,22 @@ processes adds about 800 descriptors and lands near 1200, past a 1024 ceiling.
 That is the size of a Wine crash storm, so the two excursions above are the
 same event surviving at 0.995 rather than tipping.
 
-Bus connections are opened per process, so anything that spawns processes in
-bulk spends this budget. Two things did, together:
+A second mechanism multiplied it. `~/ricearonio/steam-compat-gamemode-proton`
+was registered as Steam's **global** compatibility tool — `CompatToolMapping`
+key `"0"` — so `gamemoderun` wrapped every Proton invocation, helper
+executables included. gamemoded then registered each `conhost.exe` the crash
+storm produced as a new game client, **601 times**, and every transition ran
+`hook.sh`, which cycles about six Docker containers and four systemd timers.
+That is 61 `Entering Game Mode` and 61 `Leaving Game Mode` in one boot, ten
+inside the single minute 04:19, each spawning more processes that each open
+more bus connections.
 
-**Steam.** Launched 04:19:14, the session died 04:19:48. Steam and Proton open
-a burst of connections during startup.
+The global mapping was removed on 2026-08-18; two per-game mappings still
+select the tool deliberately, so it stays registered.
 
-**gamemode, thrashing.** 61 `Entering Game Mode` and 61 `Leaving Game Mode` in
-one boot, 10 of them inside the single minute 04:19. Each transition runs
-`hook.sh`, which stops and starts about six Docker containers and four systemd
-timers. Repeatedly launching and killing one binary under gamemode — an
-emulator under debug, here — multiplies that by every restart.
-
-The load generator is worth knowing, but it is not the defect. A desktop must
+Neither the crash storm nor the wrapper is the defect, though. A desktop must
 survive a process burst. The defect is a broker that accepts what it cannot
-hold.
+hold, and that is what the fd limit fixes.
 
 ## Distinguishing this from the other two
 
