@@ -9,7 +9,8 @@ tools/rig-reclaim / --min-gib 5 --top 10
 tools/rig-reclaim /mnt/archive4 --json
 ```
 
-It reports and never deletes. Removal is a human decision, and this tool has no
+It stays on one filesystem, the way `du -x` does — pass `--cross-filesystems`
+to follow mounts. It reports and never deletes. Removal is a human decision, and this tool has no
 way to know which of your projects is dead.
 
 ## What it looks for

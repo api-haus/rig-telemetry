@@ -76,9 +76,10 @@ def newest_source(path, now):
     return (now - newest) / 86400 if newest else -1.0
 
 
-def scan(root, max_depth):
+def scan(root, max_depth, one_fs=True):
     now = time.time()
     found = []
+    root_dev = os.stat(root).st_dev if one_fs else None
 
     def walk(path, depth):
         if depth > max_depth:
@@ -91,6 +92,14 @@ def scan(root, max_depth):
         for entry in entries:
             if not entry.is_dir(follow_symlinks=False):
                 continue
+            # Another filesystem is another capacity problem; du -x draws the
+            # same line, and without it a scan of / walks every mounted volume.
+            if root_dev is not None:
+                try:
+                    if entry.stat(follow_symlinks=False).st_dev != root_dev:
+                        continue
+                except OSError:
+                    continue
             rule = RULES.get(entry.name)
             if rule:
                 category, markers = rule
@@ -119,13 +128,15 @@ def main():
     ap.add_argument("--top", type=int, default=6, help="candidates listed per category")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--max-depth", type=int, default=9)
+    ap.add_argument("--cross-filesystems", action="store_true",
+                    help="descend into other mounts; off by default, like du -x")
     args = ap.parse_args()
 
     if not os.path.isdir(args.path):
         print(f"not a directory: {args.path}", file=sys.stderr)
         return 1
 
-    found = scan(args.path, args.max_depth)
+    found = scan(args.path, args.max_depth, one_fs=not args.cross_filesystems)
     if args.json:
         print(json.dumps(found, indent=2))
         return 0
