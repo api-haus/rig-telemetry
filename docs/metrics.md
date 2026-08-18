@@ -72,6 +72,25 @@ for that fraction of the interval.
 | `rig:disk:await_seconds` | `device` | Average wait per request. Tens of ms on NVMe means a deep queue, not a slow drive. |
 | `rig:disk:read_bytes_per_sec`, `:write_bytes_per_sec` | `device` | Throughput |
 | `rig:fs:used_ratio`, `rig:fs:avail_bytes` | `device`, `mountpoint` | Capacity. One device appears under every subvolume and bind mount it carries — aggregate `by (device)`. |
+| `rig:drive:media_errors` | `serial_number`, `model_name` | Lifetime uncorrectable read/write errors. Flat is healthy; any slope is a failing drive. |
+| `rig:drive:wear_ratio` | `serial_number`, `model_name` | Fraction of rated write endurance consumed |
+| `rig:drive:temp_celsius` | `serial_number`, `model_name` | Drive temperature, current reading |
+| `rig:drive:smart_ok` | `serial_number`, `model_name` | 1 while the drive passes its own SMART self-assessment |
+
+`rig:drive:` is keyed by serial because smartctl's own `device` label is not a
+drive identity — it is the position the drive took in the last scan, and that
+position moves. On this machine `device="nvme1"` was the Samsung 980 on 08-16
+and the Kingston SNV2S4000G on 08-18, while the 2 lifetime media errors stayed
+on the Samsung throughout. A counter keyed by `device` therefore appears to
+fall when nothing happened, and `increase()` reads the fall as a fresh burst of
+errors — `RigDiskMediaErrors` fired on all three drives that way. The
+`smartctl_device` info metric carries the serial in the same scrape as the
+counter, so joining on `device` within one sample is safe even though `device`
+is worthless across samples.
+
+Note this is not node_exporter's `device`. `rig:disk:` and `rig:fs:` are keyed
+by the kernel block name (`nvme0n1`), which is stable. Only smartctl's is a
+scan index.
 
 ---
 

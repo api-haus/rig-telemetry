@@ -236,6 +236,7 @@ docs/                         metrics, network, thermal method, runbook, adaptin
 - [docs/network.md](docs/network.md) — how a byte gets an owner, and why a capped download still lags
 - [docs/ai-usage.md](docs/ai-usage.md) — harness readers, token conventions, pricing
 - [docs/thermals.md](docs/thermals.md) — how the dust detection works
+- [docs/reclaim.md](docs/reclaim.md) — what to delete when a filesystem fills, and what it costs
 - [docs/runbook.md](docs/runbook.md) — operations, upgrades, retention, backup
 - [docs/adapting.md](docs/adapting.md) — running this on different hardware
 

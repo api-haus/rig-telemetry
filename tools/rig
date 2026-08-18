@@ -1123,10 +1123,17 @@ def cmd_disk(args) -> int:
     fs_rows = [(mp, dev, pct(v), human_bytes(avail.get(dev)), n - 1)
                for dev, (mp, v, n) in sorted(by_dev.items(), key=lambda kv: -kv[1][1])]
 
-    wear = [(s["metric"].get("device", "?"), float(s["value"][1])) for s in query("smartctl_device_percentage_used", at)]
-    temp = {s["metric"].get("device", "?"): float(s["value"][1]) for s in query("smartctl_device_temperature", at)}
-    err = {s["metric"].get("device", "?"): float(s["value"][1]) for s in query("smartctl_device_media_errors", at)}
-    smart_rows = [(d, f"{v:.0f}%", f"{temp.get(d, 0):.0f}C", f"{err.get(d, 0):.0f}") for d, v in wear]
+    # Keyed by serial, not by smartctl's `device`: that is a scan index and it
+    # moves between drives, so a device-keyed row can name the wrong disk.
+    def drive(s):
+        return (s["metric"].get("model_name", "?"), s["metric"].get("serial_number", "?"))
+
+    wear = [(drive(s), float(s["value"][1])) for s in query("rig:drive:wear_ratio", at)]
+    temp = {drive(s): float(s["value"][1]) for s in query("rig:drive:temp_celsius", at)}
+    err = {drive(s): float(s["value"][1]) for s in query("rig:drive:media_errors", at)}
+    smart_rows = [(model, serial, f"{v * 100:.0f}%", f"{temp.get((model, serial), 0):.0f}C",
+                   f"{err.get((model, serial), 0):.0f}")
+                  for (model, serial), v in sorted(wear, key=lambda kv: -kv[1])]
 
     if args.json:
         print(json.dumps({"io": rows, "filesystems": fs_rows, "smart": smart_rows}, indent=2))
@@ -1138,7 +1145,7 @@ def cmd_disk(args) -> int:
     print(table(fs_rows, ("mount", "device", "used", "free", "other mounts")))
     print()
     print(rule("smart"))
-    print(table(smart_rows, ("device", "wear", "temp", "media errors")))
+    print(table(smart_rows, ("drive", "serial", "wear", "temp", "media errors")))
     return 0
 
 

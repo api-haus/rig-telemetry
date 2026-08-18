@@ -532,7 +532,7 @@ def storage():
          thresholds=steps(("yellow", 0.01), ("orange", 0.05), ("red", 0.2)))
     stat(L, "Fullest filesystem", "max(rig:fs:used_ratio)", unit="percentunit",
          thresholds=steps(("yellow", 0.8), ("orange", 0.9), ("red", 0.95)))
-    stat(L, "Worst drive wear", "max(smartctl_device_percentage_used) / 100", unit="percentunit",
+    stat(L, "Worst drive wear", "max(rig:drive:wear_ratio)", unit="percentunit",
          desc="Fraction of rated write endurance consumed.",
          thresholds=steps(("yellow", 0.7), ("orange", 0.85), ("red", 0.95)))
     stat(L, "Swap in use", "rig:mem:swap_used_bytes", unit="bytes", w=6)
@@ -562,11 +562,14 @@ def storage():
        desc="One line per device. Subvolumes and bind mounts of the same device are collapsed.")
     ts(L, "Free space", [("max by (device) (rig:fs:avail_bytes)", "{{device}}")], unit="bytes", w=12)
     table(L, "SMART", [
-        ("smartctl_device_percentage_used", ""),
-    ], w=8, unit="percent", rename={"Value": "wear %"})
-    ts(L, "Drive temperature", [("smartctl_device_temperature", "{{device}}")], unit="celsius", w=8)
-    ts(L, "Media errors (cumulative)", [("smartctl_device_media_errors", "{{device}}")], unit="none", w=8,
-       desc="Should be a flat line. Any slope is a failing drive.")
+        ("rig:drive:wear_ratio", ""),
+    ], w=8, unit="percentunit", rename={"Value": "wear"})
+    ts(L, "Drive temperature", [("rig:drive:temp_celsius", "{{model_name}} {{serial_number}}")],
+       unit="celsius", w=8)
+    ts(L, "Media errors (cumulative)",
+       [("rig:drive:media_errors", "{{model_name}} {{serial_number}}")], unit="none", w=8,
+       desc=("Should be a flat line. Any slope is a failing drive. Keyed by serial — smartctl's "
+             "`device` is a scan index and moves between drives."))
 
     return dashboard("rig-storage", "Rig — Storage",
                      "Disk throughput, queue latency, filesystem capacity and SMART endurance.",

@@ -156,6 +156,37 @@ groups:
       - record: rig:disk:queue_depth
         expr: rate(node_disk_io_time_weighted_seconds_total[5m]) / clamp_min(rate(node_disk_io_time_seconds_total[5m]), 0.001)
 
+      # --- drives (keyed by serial; smartctl's `device` is scan order) -----
+      # smartctl renumbers drives between rescans, so `increase()` over a
+      # device-keyed counter reads a relabel as new errors. docs/metrics.md.
+      - record: rig:drive:media_errors
+        expr: |
+          sum without (device, instance, job) (
+            smartctl_device_media_errors
+            * on (device, instance) group_left (serial_number, model_name) smartctl_device
+          )
+
+      - record: rig:drive:wear_ratio
+        expr: |
+          sum without (device, instance, job) (
+            smartctl_device_percentage_used
+            * on (device, instance) group_left (serial_number, model_name) smartctl_device
+          ) / 100
+
+      - record: rig:drive:temp_celsius
+        expr: |
+          sum without (device, instance, job, temperature_type) (
+            smartctl_device_temperature{temperature_type="current"}
+            * on (device, instance) group_left (serial_number, model_name) smartctl_device
+          )
+
+      - record: rig:drive:smart_ok
+        expr: |
+          sum without (device, instance, job) (
+            smartctl_device_smart_status
+            * on (device, instance) group_left (serial_number, model_name) smartctl_device
+          )
+
       # --- filesystems (keeps `device` and `mountpoint`) ------------------
       # btrfs subvolumes and bind mounts put one device under many
       # mountpoints. Consumers aggregate `by (device)`; `mountpoint` is kept

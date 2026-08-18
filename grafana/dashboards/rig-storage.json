@@ -269,7 +269,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(smartctl_device_percentage_used) / 100",
+          "expr": "max(rig:drive:wear_ratio)",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -1105,7 +1105,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "smartctl_device_percentage_used",
+          "expr": "rig:drive:wear_ratio",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -1129,7 +1129,7 @@
               "host": true
             },
             "renameByName": {
-              "Value": "wear %"
+              "Value": "wear"
             },
             "indexByName": {}
           }
@@ -1137,7 +1137,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
+          "unit": "percentunit",
           "custom": {
             "align": "auto",
             "cellOptions": {
@@ -1178,8 +1178,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "smartctl_device_temperature",
-          "legendFormat": "{{device}}",
+          "expr": "rig:drive:temp_celsius",
+          "legendFormat": "{{model_name}} {{serial_number}}",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"
@@ -1241,7 +1241,7 @@
     {
       "type": "timeseries",
       "title": "Media errors (cumulative)",
-      "description": "Should be a flat line. Any slope is a failing drive.",
+      "description": "Should be a flat line. Any slope is a failing drive. Keyed by serial \u2014 smartctl's `device` is a scan index and moves between drives.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -1249,8 +1249,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "smartctl_device_media_errors",
-          "legendFormat": "{{device}}",
+          "expr": "rig:drive:media_errors",
+          "legendFormat": "{{model_name}} {{serial_number}}",
           "datasource": {
             "type": "prometheus",
             "uid": "rig-prom"

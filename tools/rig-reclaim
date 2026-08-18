@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Find regenerable bytes on a full filesystem, ranked by what a delete costs.
+
+Reports only. Deleting is a human decision, so this never removes anything.
+docs/reclaim.md explains each category and what restoring it costs.
+"""
+import argparse
+import json
+import os
+import sys
+import time
+
+# dirname -> (category, sibling markers that prove the context, or None)
+RULES = {
+    "Library":          ("unity",    ("Assets", "ProjectSettings")),
+    "Temp":             ("unity",    ("Assets", "ProjectSettings")),
+    "Logs":             ("unity",    ("Assets", "ProjectSettings")),
+    "Obj":              ("unity",    ("Assets", "ProjectSettings")),
+    "Intermediate":     ("unreal",   None),
+    "DerivedDataCache": ("unreal",   None),
+    "Saved":            ("unreal",   None),
+    "Binaries":         ("unreal",   None),
+    "target":           ("rust",     ("Cargo.toml",)),
+    "node_modules":     ("node",     None),
+    "__pycache__":      ("python",   None),
+    ".venv":            ("python",   None),
+    "venv":             ("python",   None),
+    ".pnpm-store":      ("pkgcache", None),
+    ".gradle":          ("pkgcache", None),
+    ".ccache":          ("pkgcache", None),
+    ".Trash-1000":      ("trash",    None),
+}
+
+# What you pay to get the category back. Ordered cheapest first.
+COST = {
+    "trash":    "nothing — already deleted",
+    "python":   "pip install, needs network",
+    "pkgcache": "refetched on next build",
+    "node":     "package install, needs network",
+    "rust":     "cargo build",
+    "unity":    "editor reimport, minutes to hours",
+    "unreal":   "engine/project rebuild, can be hours",
+}
+
+STALE_DAYS = 60
+
+
+def dir_bytes(path):
+    """On-disk bytes, from st_blocks — compressed size on btrfs, not apparent size."""
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path, onerror=lambda e: None):
+        for name in filenames:
+            try:
+                total += os.lstat(os.path.join(dirpath, name)).st_blocks * 512
+            except OSError:
+                pass
+    return total
+
+
+def is_real_venv(path):
+    # Blender and Nuke ship the stdlib `venv` module as a directory; only a real
+    # virtualenv carries pyvenv.cfg, and deleting the stdlib one breaks the app.
+    return os.path.isfile(os.path.join(path, "pyvenv.cfg"))
+
+
+def newest_source(path, now):
+    """Age in days of the most recently touched file beside a cache dir."""
+    parent = os.path.dirname(path)
+    newest = 0.0
+    try:
+        for entry in os.scandir(parent):
+            if entry.is_file(follow_symlinks=False):
+                newest = max(newest, entry.stat().st_mtime)
+    except OSError:
+        pass
+    return (now - newest) / 86400 if newest else -1.0
+
+
+def scan(root, max_depth):
+    now = time.time()
+    found = []
+
+    def walk(path, depth):
+        if depth > max_depth:
+            return
+        try:
+            entries = list(os.scandir(path))
+        except OSError:
+            return
+        names = {e.name for e in entries}
+        for entry in entries:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            rule = RULES.get(entry.name)
+            if rule:
+                category, markers = rule
+                if markers and not any(m in names for m in markers):
+                    walk(entry.path, depth + 1)
+                    continue
+                if entry.name in (".venv", "venv") and not is_real_venv(entry.path):
+                    continue
+                found.append({
+                    "category": category,
+                    "path": entry.path,
+                    "bytes": dir_bytes(entry.path),
+                    "source_age_days": round(newest_source(entry.path, now), 1),
+                })
+                continue
+            walk(entry.path, depth + 1)
+
+    walk(root, 0)
+    return found
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("path", nargs="?", default="/", help="filesystem or directory to scan")
+    ap.add_argument("--min-gib", type=float, default=1.0, help="hide candidates below this size")
+    ap.add_argument("--top", type=int, default=6, help="candidates listed per category")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--max-depth", type=int, default=9)
+    args = ap.parse_args()
+
+    if not os.path.isdir(args.path):
+        print(f"not a directory: {args.path}", file=sys.stderr)
+        return 1
+
+    found = scan(args.path, args.max_depth)
+    if args.json:
+        print(json.dumps(found, indent=2))
+        return 0
+
+    totals, counts = {}, {}
+    for hit in found:
+        totals[hit["category"]] = totals.get(hit["category"], 0) + hit["bytes"]
+        counts[hit["category"]] = counts.get(hit["category"], 0) + 1
+
+    order = [c for c in COST if c in totals]
+    print(f"{'category':10} {'count':>6} {'reclaimable':>14}   what a delete costs")
+    print("-" * 74)
+    for category in order:
+        print(f"{category:10} {counts[category]:6} {totals[category] / 1024 ** 3:10.1f} GiB"
+              f"   {COST[category]}")
+    print("-" * 74)
+    print(f"{'TOTAL':10} {len(found):6} {sum(totals.values()) / 1024 ** 3:10.1f} GiB\n")
+
+    for category in order:
+        rows = sorted((h for h in found if h["category"] == category),
+                      key=lambda h: -h["bytes"])
+        rows = [r for r in rows if r["bytes"] >= args.min_gib * 1024 ** 3][:args.top]
+        if not rows:
+            continue
+        print(f"-- {category} --")
+        for row in rows:
+            age = row["source_age_days"]
+            stale = "  STALE" if age > STALE_DAYS else ""
+            age_text = f"{age:6.0f}d" if age >= 0 else "     ?"
+            rel = os.path.relpath(row["path"], args.path)
+            print(f"   {row['bytes'] / 1024 ** 3:8.1f} GiB   source {age_text}   {rel[:60]}{stale}")
+        print()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
