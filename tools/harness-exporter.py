@@ -3,8 +3,9 @@
 
 A background thread reads what is new in each harness's session files into the
 SQLite ledger, then `/metrics` serves the ledger's running totals as counters.
-Scanning never happens on the scrape path, so a slow first pass over years of
-transcripts cannot time a scrape out.
+A second thread asks each seller what is left of its plan. Neither happens on
+the scrape path, so neither a first pass over years of transcripts nor a seller
+that stopped answering can time a scrape out.
 
     tools/harness-exporter.py --port 13360 --interval 60
 
@@ -24,6 +25,7 @@ import threading
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import harness_quota as hq  # noqa: E402
 import harness_usage as hu  # noqa: E402
 
 TOP_PROJECTS = int(os.environ.get("RIG_AI_TOP_PROJECTS", "80"))
@@ -49,6 +51,7 @@ class Registry:
 
     def __init__(self):
         self.body = "# rig harness exporter starting\n"
+        self.quota: list = []
         self.lock = threading.Lock()
 
     def publish(self, text: str):
@@ -59,8 +62,17 @@ class Registry:
         with self.lock:
             return self.body.encode()
 
+    def set_quota(self, samples: list):
+        """Held apart from the ledger pass; the two run on their own clocks."""
+        with self.lock:
+            self.quota = samples
 
-def render(db, scan: hu.Scan, prices: hu.Prices) -> str:
+    def get_quota(self) -> list:
+        with self.lock:
+            return list(self.quota)
+
+
+def render(db, scan: hu.Scan, prices: hu.Prices, quota: list) -> str:
     out: list[str] = []
 
     def emit(name, kind, help_text, samples):
@@ -136,18 +148,26 @@ def render(db, scan: hu.Scan, prices: hu.Prices) -> str:
          unpriced)
 
     gauges: dict[str, list] = {}
-    for name, tags, value in scan.gauges:
+    for name, tags, value in list(scan.gauges) + quota:
         gauges.setdefault(name, []).append((tags, value))
     emit("aiusage_sessions_live", "gauge", "Harness sessions whose state file moved recently.",
          gauges.get("aiusage_sessions_live", []))
     emit("aiusage_rate_limit_used_ratio", "gauge",
-         "Fraction of a subscription window consumed, as the harness last reported it.",
+         "Fraction of a subscription window consumed, as the seller meters it. "
+         "source=provider was asked of the seller, source=harness is what the harness last wrote.",
          gauges.get("aiusage_rate_limit_used_ratio", []))
     emit("aiusage_rate_limit_reset_timestamp_seconds", "gauge",
          "When that window resets.", gauges.get("aiusage_rate_limit_reset_timestamp_seconds", []))
+    emit("aiusage_rate_limit_window_seconds", "gauge",
+         "How long that window is, where the seller declares a length.",
+         gauges.get("aiusage_rate_limit_window_seconds", []))
     emit("aiusage_rate_limit_seen_timestamp_seconds", "gauge",
-         "When the rate-limit figures were last written by the harness.",
+         "When the figures above were true.",
          gauges.get("aiusage_rate_limit_seen_timestamp_seconds", []))
+    emit("aiusage_rate_limit_readable", "gauge",
+         "1 when the plan answered this pass. 0 means signed out, expired or no metered plan; "
+         "`rig ai limits` prints which.",
+         gauges.get("aiusage_rate_limit_readable", []))
 
     emit("aiusage_source_files", "gauge",
          "Session files found for each harness. Zero means installed but silent.",
@@ -208,6 +228,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def quota_loop(registry: Registry, interval: float):
+    """Ask each seller what is left of its plan.
+
+    Its own thread, because a seller that has stopped answering must delay
+    nothing but itself, and because a plan window moves in hours while the
+    ledger moves in seconds.
+    """
+    while True:
+        try:
+            registry.set_quota(hq.gauges(hq.read_all(max_age=interval / 2)))
+        except Exception as e:                                  # noqa: BLE001
+            # A seller that refuses is already a reading; reaching here is a
+            # fault in this reader, so it goes to the log rather than nowhere.
+            print(f"quota pass failed: {e}", file=sys.stderr, flush=True)
+        time.sleep(max(30.0, interval))
+
+
 def loop(registry: Registry, interval: float):
     db = None
     while True:
@@ -222,7 +259,7 @@ def loop(registry: Registry, interval: float):
             # only what is scanned afterwards.
             prices = hu.Prices()
             scan = hu.scan(db, prices)
-            registry.publish(render(db, scan, prices))
+            registry.publish(render(db, scan, prices, registry.get_quota()))
         except Exception as e:                                  # noqa: BLE001
             db = None
             registry.publish(f'# scan failed: {escape(str(e))}\n'
@@ -239,18 +276,26 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=int(os.environ.get("RIG_AI_PORT", "13360")))
     ap.add_argument("--addr", default=os.environ.get("RIG_AI_ADDR", "127.0.0.1"))
     ap.add_argument("--interval", type=float, default=float(os.environ.get("RIG_AI_INTERVAL", "60")))
+    ap.add_argument("--quota-interval", type=float,
+                    default=float(os.environ.get("RIG_AI_QUOTA_INTERVAL", "300")),
+                    help="how often to ask each seller what is left of its plan; "
+                         "zero or less never asks")
     ap.add_argument("--once", action="store_true", help="scan, print the metrics, exit")
     args = ap.parse_args()
 
     if args.once:
         db = hu.open_ledger()
         prices = hu.Prices()
-        print(render(db, hu.scan(db, prices), prices), end="")
+        quota = hq.gauges(hq.read_all()) if args.quota_interval > 0 else []
+        print(render(db, hu.scan(db, prices), prices, quota), end="")
         return 0
 
     registry = Registry()
     Handler.registry = registry
     threading.Thread(target=loop, args=(registry, args.interval), daemon=True).start()
+    if args.quota_interval > 0:
+        threading.Thread(target=quota_loop, args=(registry, args.quota_interval),
+                         daemon=True).start()
     server = http.server.ThreadingHTTPServer((args.addr, args.port), Handler)
     print(f"harness exporter on http://{args.addr}:{args.port}/metrics "
           f"reading {hu.HOME}, ledger {hu.ledger_path()}", flush=True)

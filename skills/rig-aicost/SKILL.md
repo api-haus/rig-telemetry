@@ -1,6 +1,6 @@
 ---
 name: rig-aicost
-description: Report what AI coding harnesses cost, in tokens and in API-list dollars, across Claude Code, Codex, Kimi Code, OpenCode, pi, Qwen Code, dsh, Gemini CLI, Goose, Crush, Copilot CLI and droid. Use when the user asks how much they spent on AI, what a session or project cost, where the tokens went, which model or subagent is expensive, whether context is being re-read, how much of a subscription window is used, or asks to compare harnesses, providers or plans. Also use before claiming any AI usage figure, and when the user mentions token burn, cache reads, cost per turn, or "is this worth it on the API".
+description: Report what AI coding harnesses cost, in tokens and in API-list dollars, across Claude Code, Codex, Kimi Code, OpenCode, pi, Qwen Code, dsh, Gemini CLI, Goose, Crush, Copilot CLI and droid, and what each subscription has left of its session, weekly and model-scoped windows. Use when the user asks how much they spent on AI, what a session or project cost, where the tokens went, which model or subagent is expensive, whether context is being re-read, how much of a plan is used or left, when a limit resets, whether they are about to run out, or asks to compare harnesses, providers or plans. Also use before claiming any AI usage figure, and when the user mentions token burn, cache reads, cost per turn, or "is this worth it on the API".
 ---
 
 # rig-aicost
@@ -39,13 +39,43 @@ was actually done, so it is the one that ranks projects, models and habits.
 | `rig ai daily --by-harness` | One column per harness |
 | `rig ai projects --top 25` | Which project directory is expensive |
 | `rig ai models` | Per model, with the exact $/M rates used |
-| `rig ai limits` | Subscription windows, where a harness publishes them |
+| `rig ai limits` | What each subscription has left, asked of the seller |
 | `rig ai doctor` | What is read, what is priced, what is missing |
 | `rig ai doctor --verify` | Recount every file and check the ledger against it |
 | `rig ai scan` | Read new session files now, without the container |
 | `rig ai backfill` | Put the ledger's history into Prometheus for Grafana |
 
 Every one takes `--json`.
+
+## "How much is left" is a different question from "what did it cost"
+
+`rig ai` counts tokens and prices them. It cannot say what a plan has left, and
+neither can any arithmetic on its output. Use the other command:
+
+```
+rig ai limits
+```
+
+The percentages come from the seller that meters the plan, across **every
+device the account is signed in on** — not from this machine's tokens. Claude
+Code reports a 5-hour session window, a weekly window, and a weekly window
+scoped to Fable; Codex and Kimi Code report session and weekly.
+
+When answering "am I about to run out", quote the window, the percentage left
+and the reset time together. A window at 90% that resets in twenty minutes is
+not the same finding as one at 90% with six days to run.
+
+Two things the table says that are easy to skip:
+
+- **`measured`** — how old the figure is. A plan read four hours ago is a
+  different fact from one read now. `rig ai limits --refresh` asks again.
+- **`from`** — `provider` was asked of the seller; `harness` is what the
+  harness itself last wrote, which is only as fresh as its last run.
+
+If a plan reports nothing, `rig ai limits` prints why on its own line — signed
+out, token expired, or an account on no metered plan. Read that sentence out
+rather than reporting the plan as unused. An expired Kimi token means the CLI
+has not run for fifteen minutes; nothing is wrong with the plan.
 
 ## Read the role split before blaming the model
 

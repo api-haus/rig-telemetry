@@ -168,6 +168,28 @@ Per project, per model, per day, and split between your own turns and the
 subagents you sent out. `docs/ai-usage.md` explains the conventions, the price
 lookup, and why this reports about half of what Claude Code's own statistics do.
 
+**And it knows what the plan has left.** That is a different question, and no
+count made here can answer it: a plan is a timed window the seller meters on
+its own side, against every device the account is signed in on. So the seller
+is asked, with the credential the harness already keeps — read-only, because a
+refresh would sign the running session out.
+
+```
+$ rig ai limits
+  harness      plan      window        used   left    resets in         measured     from
+  -----------  --------  ------------  -----  ------  ----------------  -----------  --------
+  claude-code  max       session       2.0%   98.0%   4:29:55           0:00:07 ago  provider
+  claude-code  max       weekly        0.0%   100.0%  6 days, 20:49:55  0:00:07 ago  provider
+  claude-code  max       weekly-fable  0.0%   100.0%  -                 0:00:07 ago  provider
+  kimi-code    standard  session       9.0%   91.0%   2:42:46           0:00:07 ago  provider
+  kimi-code    standard  weekly        24.0%  76.0%   1 day, 17:42:46   0:00:07 ago  provider
+```
+
+Claude Code, Codex and Kimi Code, each on the endpoint its own `/usage` command
+reads. A window whose reset has passed is dropped rather than shown stale, and
+a seller that stops answering keeps its last figure with the failure printed
+beside it.
+
 ## Claude Code plugin
 
 This repo is also a Claude Code plugin. Installing it puts `rig` on PATH and
@@ -221,7 +243,8 @@ tools/rig                     the CLI
 tools/gen-dashboards.py       dashboard generator
 tools/net-exporter.py         per-process network attribution and link quality
 tools/harness_usage.py        one reader per AI harness, and the price lookup
-tools/harness-exporter.py     serves that to Prometheus
+tools/harness_quota.py        one reader per subscription: what the plan has left
+tools/harness-exporter.py     serves both to Prometheus
 share/prices.tsv              model names that reach no models.dev entry
 bin/rig                       PATH shim, added automatically by the plugin
 .claude-plugin/               plugin and marketplace manifests

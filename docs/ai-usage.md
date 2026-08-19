@@ -277,6 +277,86 @@ independent check on the arithmetic here.
 
 ---
 
+## What the subscription has left
+
+Everything above is what the tokens were **worth**. It cannot say what the plan
+has **left**, and no amount of counting here can: a plan is a timed window that
+the seller meters on its own side, against every device the account is signed
+in on. Your phone, a second machine and a teammate on the same seat all spend
+it. So the figure is asked of the seller.
+
+```
+rig ai limits             # what is left of each window, and when it resets
+rig ai limits --refresh   # ask now instead of reusing the last reading
+rig ai limits --at <RFC3339>   # what a window looked like then, from Prometheus
+```
+
+```
+  harness      plan      window        used   left    resets in         measured     from
+  -----------  --------  ------------  -----  ------  ----------------  -----------  --------
+  claude-code  max       session       2.0%   98.0%   4:29:55           0:00:07 ago  provider
+  claude-code  max       weekly        0.0%   100.0%  6 days, 20:49:55  0:00:07 ago  provider
+  claude-code  max       weekly-fable  0.0%   100.0%  -                 0:00:07 ago  provider
+  kimi-code    standard  session       9.0%   91.0%   2:42:46           0:00:07 ago  provider
+  kimi-code    standard  weekly        24.0%  76.0%   1 day, 17:42:46   0:00:07 ago  provider
+```
+
+### Where each figure comes from
+
+`tools/harness_quota.py`, one class per plan. Each reads the credential its
+harness already keeps and calls the same endpoint that harness's own `/usage`
+command calls.
+
+| Plan | Credential | Endpoint |
+| --- | --- | --- |
+| Claude Code | `~/.claude/.credentials.json` | `api.anthropic.com/api/oauth/usage` |
+| Codex | `~/.codex/auth.json` | `chatgpt.com/backend-api/wham/usage` |
+| Kimi Code | `~/.kimi-code/credentials/kimi-code.json` | `api.kimi.com/coding/v1/usages` |
+
+**Read-only, always.** A refresh rotates the refresh token with it, so writing
+one of these files back would sign out whatever session holds the old one. An
+expired token is reported as expired, with the command that refreshes it. Kimi
+Code's token lasts fifteen minutes and only its CLI rewrites the file, so an
+idle machine reports the expiry rather than a figure.
+
+Codex is the one plan with two ways to learn the same windows. The endpoint
+needs `auth.json`, which only a ChatGPT login writes — a Codex driven by an API
+key has none. Failing that, every rollout carries the windows the server
+returned alongside each response, so the newest populated one is read instead.
+The `from` column says which: `provider` was asked of the seller just now,
+`harness` is what the harness itself last wrote, and is only as fresh as its
+last run.
+
+### Window names
+
+`session` and `weekly` are the two the sellers meter, and both Codex and Kimi
+declare a window's length without naming it — so the length is what names it
+here, to the minute. A window the seller scopes to one model keeps the model in
+its name: Claude's Fable share of the same week is `weekly-fable`, and a scoped
+model added tomorrow appears on its own rather than falling out of a list in
+this repo.
+
+`aiusage_rate_limit_window_seconds` carries a length only where the seller
+declares one. Kimi's plan window declares none — its reset time is the fact,
+and the name is the one Kimi's own CLI prints.
+
+### Two rules that keep a number from lying
+
+**A window whose reset has passed is dropped, whatever it said.** After a reset
+the seller cleared the counter and nobody here saw the new one, so the last
+figure describes a window that no longer exists. This is what keeps a Codex
+rollout from six months ago off the dashboard at 0%.
+
+**A seller that refuses now has not unsaid what it said an hour ago.** The last
+good figure is kept, marked `(stale)`, with the failure printed beside it. The
+`measured` column is a column rather than a footnote for the same reason: a
+plan read four hours ago is a different fact from one read now.
+
+`rig ai doctor` lists every plan, how many windows it answered with, and the
+exact sentence for each one that answered with none.
+
+---
+
 ## Metrics
 
 Raw series come from `tools/harness-exporter.py` on `127.0.0.1:13360`, scraped
@@ -293,7 +373,10 @@ whole machine's hardware telemetry.
 | `aiusage_project_cost_usd_total` | `harness`, `project`, `provider`, `model` | List value per project |
 | `aiusage_unpriced_tokens_total` | `harness`, `provider`, `model` | Tokens with no published rate |
 | `aiusage_sessions_live` | `harness`, `project`, `status` | Sessions whose state file moved recently |
-| `aiusage_rate_limit_used_ratio` | `harness`, `window`, `plan` | Subscription window consumed |
+| `aiusage_rate_limit_used_ratio` | `harness`, `window`, `plan`, `source` | Subscription window consumed |
+| `aiusage_rate_limit_reset_timestamp_seconds` | same | When that window resets |
+| `aiusage_rate_limit_window_seconds` | same | How long it is, where the seller declares a length |
+| `aiusage_rate_limit_readable` | `harness` | 1 when the plan answered this pass |
 | `aiusage_source_files` / `aiusage_source_installed` | `harness` | Coverage |
 
 `kind` is `main` or `subagent`. Delegate enough work and most of the spend
@@ -328,8 +411,9 @@ vocabulary. `rig:ai:cost_usd` is the running total, `rig:ai:burn_usd_per_hour`
 the rate, `rig:ai:cache_read_share` the fraction of input-side tokens that are
 the window being re-read.
 
-Only Codex publishes a subscription window. `rig ai limits` shows it and says
-so when nothing does.
+`rig:ai:limit_used_ratio` and `rig:ai:limit_left_ratio` are the subscription
+windows above. They are gauges read from the seller, not counters derived from
+the ledger, and they fall for every device the account is signed in on.
 
 ---
 
@@ -464,6 +548,10 @@ already scanned rather than pretending the gap is zero.
 **Only tokens that a harness records can be counted.** A harness that writes no
 usage anywhere is invisible here, however much it spent. `rig ai doctor` lists
 every reader so the blank is visible.
+
+**A plan window is the whole account, not this machine.** The percentages come
+from the seller and include every device signed into the same account. Only the
+token figures above are this machine's own.
 
 **Rates change.** The figure is today's list price applied to old tokens, not
 the price on the day. That is the right choice for "is this project expensive"

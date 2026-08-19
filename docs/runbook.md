@@ -160,6 +160,24 @@ and a panel that fails to migrate shows as empty rather than as an error.
    `tools/rig` read that namespace, not raw exporter names.
 5. Document them in `docs/metrics.md`.
 
+## What leaves this machine
+
+Every port binds to loopback. Three things still reach outward, all from the
+harness exporter:
+
+| Host | Carries | Why |
+| --- | --- | --- |
+| `models.dev` | nothing of yours | the price catalogue, refetched weekly |
+| `api.anthropic.com`, `chatgpt.com`, `api.kimi.com` | the harness's own OAuth token | what each subscription has left |
+
+The three usage endpoints are the same ones each harness's own `/usage` command
+calls, with the same credential, and nothing is sent but that token. The files
+are read and never written: a refresh rotates the refresh token with it and
+would sign out whatever session holds the old one.
+
+`RIG_AI_QUOTA_INTERVAL=0` stops the exporter asking at all. `rig ai limits`
+still asks when you run it, because that is you asking.
+
 ## Never write blocks that reach into the head
 
 `promtool tsdb create-blocks-from` writes into the same directory Prometheus is

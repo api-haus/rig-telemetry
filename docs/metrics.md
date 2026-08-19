@@ -260,12 +260,19 @@ the readers, the token conventions and the pricing rules.
 | `rig:ai:usd_per_million_tokens` | — | Blended rate. Steps up when a cache lapses. |
 | `rig:ai:reported_cost_usd` / `rig:ai:subsidy_usd` | — | What harnesses claim, and the gap to list |
 | `rig:ai:sessions_live` | `harness` | Sessions whose state file moved recently |
-| `rig:ai:limit_used_ratio` | `harness`, `window`, `plan` | Subscription window consumed. Codex only. |
-| `rig:ai:limit_reset_in_seconds` | `harness`, `window` | Until that window resets |
+| `rig:ai:limit_used_ratio` | `harness`, `window`, `plan`, `source` | Subscription window consumed, as the seller meters it |
+| `rig:ai:limit_left_ratio` | same | What is left of it |
+| `rig:ai:limit_reset_in_seconds` | same | Until that window resets |
 | `rig:ai:unpriced_tokens` | — | Tokens no rate reaches, excluded from every figure. `share/prices.tsv` names them. |
 | `rig:ai:scan_age_seconds` | — | Since the exporter last read the session files |
 
 `reasoning` is already inside `output`. It is reported and never priced.
+
+The three `limit_*` series are the exception on this page: they are gauges read
+from the seller, not counters derived from the ledger, and they fall for every
+device the account is signed in on rather than for this machine alone. `window`
+is `session`, `weekly`, or a weekly window scoped to one model such as
+`weekly-fable`. `docs/ai-usage.md`.
 
 These counters begin at whatever was already on disk when the exporter first
 ran, so `increase()` over a window that predates it reports nothing. Use `rig

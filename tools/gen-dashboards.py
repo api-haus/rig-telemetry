@@ -1060,12 +1060,15 @@ def ai():
        desc="A step up means either a dearer model or a cache rebuild.")
 
     L.row("Subscription and coverage")
-    ts(L, "Subscription window used", [
-        (f'aiusage_rate_limit_used_ratio{{{PICK_HARNESS}}}', "{{harness}} {{window}} ({{plan}})"),
+    ts(L, "Subscription window left", [
+        (f'1 - aiusage_rate_limit_used_ratio{{{PICK_HARNESS}}}',
+         "{{harness}} {{window}} ({{plan}})"),
     ], unit="percentunit", max_=1, w=12,
-       no_value="No harness here publishes its subscription window. Codex is the one that does.",
-       desc="Read straight from the harness. It is the only figure on this dashboard that is about "
-            "the plan rather than about list price.")
+       no_value="No subscription here answered. `rig ai limits` says whether that is a signed-out "
+                "harness, an expired token, or an account on no metered plan.",
+       desc="What the plan has left, asked of the seller that meters it. It is the only figure on "
+            "this dashboard that is about the plan rather than about list price, and it falls for "
+            "every device the account is signed in on, not only this one.")
     ts(L, "List price against what the harness claims", [
         (f'sum({picked("aiusage_reported_cost_usd_total")})', "harness reported"),
         (f"sum({money})", "API list value"),

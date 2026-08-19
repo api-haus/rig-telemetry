@@ -187,6 +187,7 @@ services:
       RIG_AI_ADDR: 127.0.0.1
       RIG_AI_PORT: "13360"
       RIG_AI_INTERVAL: "${RIG_AI_INTERVAL:-60}"
+      RIG_AI_QUOTA_INTERVAL: "${RIG_AI_QUOTA_INTERVAL:-300}"
       RIG_AI_TOP_PROJECTS: "${RIG_AI_TOP_PROJECTS:-80}"
     volumes:
       - ./tools:/tools:ro

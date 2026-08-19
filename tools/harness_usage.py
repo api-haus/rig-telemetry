@@ -639,8 +639,8 @@ class Codex(Source):
 
     `cached_input_tokens` is a subset of `input_tokens` and reasoning is a
     subset of output, so both are subtracted out to reach the exclusive form.
-    The rollout also carries the plan's rate-limit windows, which no other
-    harness on this machine publishes.
+    The rollout also carries the plan's rate-limit windows; `harness_quota.py`
+    reads those, because a plan is metered by the seller rather than counted here.
     """
     name = "codex"
     home_hint = ".codex"
@@ -676,7 +676,6 @@ class Codex(Source):
             prev = ctx.get("total") or {}
             last = {k: int(total.get(k, 0)) - int(prev.get(k, 0)) for k in total}
         ctx["total"] = info.get("total_token_usage") or ctx.get("total")
-        self._limits(payload, ctx)
         cached = int(last.get("cached_input_tokens") or 0)
         fresh = max(0, int(last.get("input_tokens") or 0) - cached)
         out = int(last.get("output_tokens") or 0)
@@ -693,43 +692,6 @@ class Codex(Source):
             cache_read=cached,
             reasoning=int(last.get("reasoning_output_tokens") or 0),
         )
-
-    def _limits(self, payload, ctx):
-        limits = payload.get("rate_limits")
-        if not limits:
-            return
-        ctx["limits"] = {
-            "plan": limits.get("plan_type") or "unknown",
-            "windows": [(w, limits.get(w, {}) or {}) for w in ("primary", "secondary")],
-        }
-
-    def gauges(self):
-        """The newest rollout that carries a rate-limit block wins."""
-        out = []
-        newest = None
-        for path in sorted(self.files(), key=lambda p: p.stat().st_mtime, reverse=True)[:4]:
-            for obj, _ in self._lines(path, 0, '"rate_limits"'):
-                if obj is None:
-                    break
-                limits = (obj.get("payload") or {}).get("rate_limits")
-                if limits:
-                    newest = (self._iso(obj.get("timestamp")), limits)
-            if newest:
-                break
-        if not newest:
-            return out
-        when, limits = newest
-        for key, label in (("primary", "session"), ("secondary", "weekly")):
-            w = limits.get(key) or {}
-            if w.get("used_percent") is None:
-                continue
-            tags = {"harness": self.name, "window": label,
-                    "plan": str(limits.get("plan_type") or "unknown")}
-            out.append(("aiusage_rate_limit_used_ratio", tags, float(w["used_percent"]) / 100))
-            if w.get("resets_at"):
-                out.append(("aiusage_rate_limit_reset_timestamp_seconds", tags, float(w["resets_at"])))
-        out.append(("aiusage_rate_limit_seen_timestamp_seconds", {"harness": self.name}, when))
-        return out
 
 
 class KimiCode(Source):

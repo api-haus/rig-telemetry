@@ -1724,8 +1724,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Subscription window used",
-      "description": "Read straight from the harness. It is the only figure on this dashboard that is about the plan rather than about list price.",
+      "title": "Subscription window left",
+      "description": "What the plan has left, asked of the seller that meters it. It is the only figure on this dashboard that is about the plan rather than about list price, and it falls for every device the account is signed in on, not only this one.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -1733,7 +1733,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "aiusage_rate_limit_used_ratio{harness=~\"$harness\"}",
+          "expr": "1 - aiusage_rate_limit_used_ratio{harness=~\"$harness\"}",
           "legendFormat": "{{harness}} {{window}} ({{plan}})",
           "datasource": {
             "type": "prometheus",
@@ -1767,7 +1767,7 @@
           },
           "min": null,
           "max": 1,
-          "noValue": "No harness here publishes its subscription window. Codex is the one that does."
+          "noValue": "No subscription here answered. `rig ai limits` says whether that is a signed-out harness, an expired token, or an account on no metered plan."
         },
         "overrides": []
       },

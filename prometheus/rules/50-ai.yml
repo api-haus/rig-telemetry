@@ -112,9 +112,13 @@ groups:
         expr: time() - aiusage_scan_timestamp_seconds
 
       # Fraction of a subscription window consumed, and how long until it
-      # resets. Only Codex publishes this; the others say nothing.
+      # resets. Read from the seller that meters the plan, not from the tokens
+      # counted above — a plan is spent by every device the account signed in on.
       - record: rig:ai:limit_used_ratio
         expr: aiusage_rate_limit_used_ratio
+
+      - record: rig:ai:limit_left_ratio
+        expr: 1 - aiusage_rate_limit_used_ratio
 
       - record: rig:ai:limit_reset_in_seconds
         expr: clamp_min(aiusage_rate_limit_reset_timestamp_seconds - time(), 0)

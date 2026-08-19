@@ -1425,36 +1425,90 @@ def cmd_ai_models(args) -> int:
 
 
 def cmd_ai_limits(args) -> int:
-    """Subscription windows, straight from the harness that publishes them.
+    """What is left of each subscription, asked of the seller that meters it.
 
-    A harness writes these only while it is running, so an idle one leaves a
-    figure that was true when it last ran. The measurement time is a column
-    rather than a footnote, because a window that reset hours ago reads as
-    fully used until the harness runs again.
+    A plan is metered on the seller's side, across every device the account is
+    signed in on, so the figure comes from the seller rather than from the
+    tokens counted here. `--at` reads the recorded series instead, which is the
+    only way to ask what a window looked like at some earlier moment.
     """
-    now = datetime.now(timezone.utc).timestamp()
+    if args.at:
+        return _limits_recorded(args)
+    hq = _quota()
+    rows, raw, notes = [], [], []
+    for q in hq.read_all(max_age=0 if args.refresh else hq.MAX_AGE):
+        # Shortest window first; one whose length the seller never declared last.
+        for w in sorted(q.windows, key=lambda w: (w.seconds or 1e12, w.label)):
+            rows.append((q.harness, q.plan, w.label, pct(w.used), pct(1 - w.used),
+                         _in(w.resets_at), _ago(q.measured),
+                         q.source + (" (stale)" if q.stale else "")))
+            raw.append({"harness": q.harness, "plan": q.plan, "window": w.label,
+                        "used_ratio": w.used, "left_ratio": 1 - w.used,
+                        "resets_at": w.resets_at, "window_seconds": w.seconds,
+                        "measured": q.measured, "source": q.source, "stale": q.stale})
+        if q.error:
+            notes.append(f"{q.harness}: {q.error}")
+            raw.append({"harness": q.harness, "error": q.error})
+    if args.json:
+        print(json.dumps(raw, indent=2))
+        return 0
+    if rows:
+        print(table(rows, ("harness", "plan", "window", "used", "left", "resets in",
+                           "measured", "from")))
+    for note in notes:
+        print(f"  {note}")
+    if not rows and not notes:
+        print("  no subscription on this machine publishes a window.")
+    return 0
+
+
+def _limits_recorded(args) -> int:
+    """The same table out of Prometheus, which is what `--at` can reach."""
     rows = []
     for s in query("aiusage_rate_limit_used_ratio", args.at):
         m = s["metric"]
-        where = f'{{harness="{m.get("harness")}",window="{m.get("window")}"}}'
-        reset = scalar(f"aiusage_rate_limit_reset_timestamp_seconds{where}", args.at)
-        seen = scalar(f'aiusage_rate_limit_seen_timestamp_seconds{{harness="{m.get("harness")}"}}',
-                      args.at)
-        span = lambda v: "-" if v is None else str(timedelta(seconds=int(abs(v))))
-        rows.append((m.get("harness", "?"), m.get("plan", "?"), m.get("window", "?"),
-                     pct(float(s["value"][1])),
-                     "elapsed" if reset and reset < now else span(reset and reset - now),
-                     span(seen and now - seen) + " ago" if seen else "-"))
+        where = ",".join(f'{k}="{m.get(k)}"' for k in ("harness", "window", "plan", "source"))
+        reset = scalar(f"aiusage_rate_limit_reset_timestamp_seconds{{{where}}}", args.at)
+        seen = scalar(f'aiusage_rate_limit_seen_timestamp_seconds{{harness="{m.get("harness")}"'
+                      f',source="{m.get("source")}"}}', args.at)
+        used = float(s["value"][1])
+        # Shortest window first, the way the live table orders them.
+        rank = scalar(f"aiusage_rate_limit_window_seconds{{{where}}}", args.at)
+        rows.append(((m.get("harness", "?"), rank or 1e12, m.get("window", "?")),
+                     (m.get("harness", "?"), m.get("plan", "?"), m.get("window", "?"),
+                      pct(used), pct(1 - used), _in(reset), _ago(seen), m.get("source", "?")),
+                     {"harness": m.get("harness"), "plan": m.get("plan"),
+                      "window": m.get("window"), "used_ratio": used, "left_ratio": 1 - used,
+                      "resets_at": reset, "window_seconds": rank, "measured": seen,
+                      "source": m.get("source")}))
+    rows.sort()
     if args.json:
-        print(json.dumps([dict(zip(("harness", "plan", "window", "used", "resets_in", "measured"), r))
-                          for r in rows], indent=2))
+        print(json.dumps([r[2] for r in rows], indent=2))
         return 0
-    print(table(rows, ("harness", "plan", "window", "used", "resets in", "measured")))
-    if not rows:
-        print("  no harness on this machine publishes its subscription window.")
-    else:
-        print("\n  Read only while the harness runs. An `elapsed` window has reset since.")
+    rows = [r[1] for r in rows]
+    print(table(rows, ("harness", "plan", "window", "used", "left", "resets in",
+                       "measured", "from")))
     return 0
+
+
+def _quota():
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    import harness_quota
+    return harness_quota
+
+
+def _in(when: float | None) -> str:
+    """How long until a moment, or that it has already passed."""
+    if not when:
+        return "-"
+    left = when - datetime.now(timezone.utc).timestamp()
+    return "elapsed" if left <= 0 else str(timedelta(seconds=int(left)))
+
+
+def _ago(when: float | None) -> str:
+    if not when:
+        return "-"
+    return str(timedelta(seconds=int(datetime.now(timezone.utc).timestamp() - when))) + " ago"
 
 
 def cmd_ai_scan(args) -> int:
@@ -1735,6 +1789,23 @@ def cmd_ai_doctor(args) -> int:
                      ("installed, no session files yet" if src.installed() else "not installed")))
     print(table(rows, ("harness", "on this machine", "files", "")))
     print(f"\n  home searched: {hu.HOME}")
+
+    print()
+    print(rule("subscriptions"))
+    hq = _quota()
+    seen = {q.harness: q for q in hq.read_all()}
+    rows = []
+    for cls in hq.SUBSCRIPTIONS:
+        sub = cls()
+        if not sub.installed():
+            rows.append((sub.name, "not installed", "-"))
+            continue
+        q = seen.get(sub.name)
+        rows.append((sub.name, f"{len(q.windows)} windows" if q and q.windows else "no window",
+                     q.error if q and q.error else "reads it"))
+    print(table(rows, ("harness", "windows", "")))
+    print("\n  Read from the seller with the credential the harness keeps, never refreshed.\n"
+          "  A window is what the plan has left; the money above is what the tokens were worth.")
 
     path = hu.catalogue_path()
     print()
@@ -2141,7 +2212,9 @@ def main() -> int:
     a.add_argument("--days", type=int, default=30, help="days to project over")
     a.set_defaults(fn=cmd_ai_clock)
 
-    a = ai.add_parser("limits", help="subscription windows, where a harness publishes them")
+    a = ai.add_parser("limits", help="what is left of each subscription, asked of the seller")
+    a.add_argument("--refresh", action="store_true",
+                   help="ask the sellers now instead of reusing the last reading")
     a.set_defaults(fn=cmd_ai_limits)
 
     a = ai.add_parser("scan", help="read new session files into the ledger now")

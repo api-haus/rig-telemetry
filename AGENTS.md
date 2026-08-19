@@ -122,10 +122,16 @@ Say which one you mean; never call the list figure a bill.
 ```
 rig ai                    # everything, split by harness, role, model, project
 rig ai daily --since 30d  # per day, reaches back further than Prometheus does
+rig ai limits             # what each subscription has left, from the seller
 rig ai clock              # what a seller's peak window costs at your own hours
 rig ai doctor             # what is read, what is priced, what is missing
 rig ai doctor --verify    # recount the files, prove the ledger against them
 ```
+
+`rig ai` prices tokens; `rig ai limits` reads plans. They answer different
+questions and neither derives the other — a plan window is metered by the
+seller against every device the account is signed in on, so no count made here
+can reproduce it. `docs/ai-usage.md`.
 
 Never answer "how much will this price change cost me" by multiplying a
 headline rate. Nearly every token an agent sends is a cache read, so the
@@ -238,7 +244,8 @@ tools/rig                     the CLI above
 tools/net-exporter.py         per-process network attribution, ICMP probe, radio
 tools/gen-dashboards.py       dashboard generator; --check verifies freshness
 tools/harness_usage.py        one reader per AI harness, and the price lookup
-tools/harness-exporter.py     serves that to Prometheus on :13360
+tools/harness_quota.py        one reader per subscription: what the plan has left
+tools/harness-exporter.py     serves both to Prometheus on :13360
 tools/vram-guard              the VRAM cap: install, apply, status, verify
 tools/vram-probe.py           allocates VRAM until refused; used by verify
 share/prices.tsv              model names that reach no models.dev entry
@@ -257,6 +264,12 @@ To teach the stack a new harness, add a `Source` subclass in
 `tools/harness_usage.py` and list it in `SOURCES`. It declares the files it
 owns and yields records in the exclusive token convention; pricing, dedupe,
 incremental reads and every metric come for free.
+
+To teach it a new **subscription**, add a `Subscription` subclass in
+`tools/harness_quota.py` and list it in `SUBSCRIPTIONS`. It reads the
+credential its harness already keeps — never writing one back — and returns the
+windows the seller reports; caching, staleness, the metrics and `rig ai limits`
+come for free.
 
 Grafana is at <http://localhost:13337>, Prometheus at <http://localhost:13390>.
 Both bind to loopback only.
