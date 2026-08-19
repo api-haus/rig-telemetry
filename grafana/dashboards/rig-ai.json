@@ -624,7 +624,7 @@
     {
       "type": "stat",
       "title": "Last 24h",
-      "description": "",
+      "description": "What the counter has climbed in a day. Never increase(): a backfilled sample meeting a live one reads as a reset and adds the whole counter back.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -632,7 +632,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[24h]))",
+          "expr": "sum(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}) - sum(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"} offset 24h)",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -700,7 +700,7 @@
     {
       "type": "stat",
       "title": "Last 7 days",
-      "description": "",
+      "description": "What the counter has climbed in a week, measured the same way.",
       "datasource": {
         "type": "prometheus",
         "uid": "rig-prom"
@@ -708,7 +708,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}[7d]))",
+          "expr": "sum(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"}) - sum(aiusage_cost_usd_total{harness=~\"$harness\",provider=~\"$provider\",model=~\"$model\"} offset 7d)",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",

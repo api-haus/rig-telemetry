@@ -252,7 +252,7 @@ the readers, the token conventions and the pricing rules.
 | `rig:ai:cost_usd:by_role` | `role` | **Where the money goes.** Read this first. |
 | `rig:ai:cost_usd:by_kind` | `harness`, `kind` | `main` against `subagent` |
 | `rig:ai:burn_usd_per_hour` | — | Dollars of list value per hour, over the last hour |
-| `rig:ai:cost_usd:today` / `:week` | — | Increase over 24h / 7d |
+| `rig:ai:cost_usd:today` / `:week` | — | Climb over 24h / 7d, as an offset delta rather than `increase()` |
 | `rig:ai:tokens:by_role` | `role` | `input`, `output`, `cache_read`, `cache_write`, `reasoning` |
 | `rig:ai:tokens_per_sec` | `harness`, `role` | Live throughput |
 | `rig:ai:requests_per_hour` | `harness` | API responses per hour |

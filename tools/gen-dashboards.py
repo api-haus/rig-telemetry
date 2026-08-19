@@ -1063,9 +1063,15 @@ def ai():
     L.row("API list value")
     stat(L, "All recorded", f"sum({money})", unit="currencyUSD", w=4, decimals=0,
          desc=LIST_PRICE + " Counts every session file still on disk.")
-    stat(L, "Last 24h", f"sum(increase({money}[24h]))", unit="currencyUSD", w=3, decimals=0,
-         thresholds=steps(("yellow", 50), ("orange", 200), ("red", 500)))
-    stat(L, "Last 7 days", f"sum(increase({money}[7d]))", unit="currencyUSD", w=3, decimals=0)
+    # An offset delta, not increase(): a counter recomputed from the ledger can
+    # move down, and increase() reads that as a reset and re-adds the lot.
+    stat(L, "Last 24h", f"sum({money}) - sum({money} offset 24h)", unit="currencyUSD", w=3,
+         decimals=0, thresholds=steps(("yellow", 50), ("orange", 200), ("red", 500)),
+         desc="What the counter has climbed in a day. Never increase(): a backfilled sample "
+              "meeting a live one reads as a reset and adds the whole counter back.")
+    stat(L, "Last 7 days", f"sum({money}) - sum({money} offset 7d)", unit="currencyUSD", w=3,
+         decimals=0,
+         desc="What the counter has climbed in a week, measured the same way.")
     stat(L, "Burn rate", f"sum(rate({money}[1h])) * 3600", unit="currencyUSD", w=3, decimals=1,
          desc="Dollars of list value per hour, averaged over the last hour.",
          thresholds=steps(("yellow", 10), ("orange", 40), ("red", 100)))

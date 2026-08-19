@@ -50,11 +50,15 @@ groups:
       - record: rig:ai:burn_usd_per_hour:by_project
         expr: sum by (harness, project) (rate(aiusage_project_cost_usd_total[1h])) * 3600
 
+      # An offset delta rather than increase(): these counters are recomputed
+      # from the ledger on every read, so a value can move down — a reprice, or
+      # a backfilled sample meeting a live one. increase() reads any decrease
+      # as a reset and adds the whole counter back.
       - record: rig:ai:cost_usd:today
-        expr: sum(increase(aiusage_cost_usd_total[24h]))
+        expr: sum(aiusage_cost_usd_total) - sum(aiusage_cost_usd_total offset 24h)
 
       - record: rig:ai:cost_usd:week
-        expr: sum(increase(aiusage_cost_usd_total[7d]))
+        expr: sum(aiusage_cost_usd_total) - sum(aiusage_cost_usd_total offset 7d)
 
       # --- tokens -----------------------------------------------------------
       - record: rig:ai:tokens

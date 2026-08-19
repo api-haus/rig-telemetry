@@ -1923,6 +1923,17 @@ def _head_floor() -> tuple[float, str]:
     return midnight.timestamp(), "the start of today — Prometheus did not answer"
 
 
+def _sample(value: float) -> str:
+    """A cost written exactly as the exporter writes it.
+
+    Rounded to six places instead, a backfilled sample lands a fraction of a
+    cent *above* the live one that follows it. Prometheus reads any decrease as
+    a counter reset and `increase()` then adds the whole counter back, which is
+    how a seven-day figure came out larger than the lifetime total.
+    """
+    return str(int(value)) if float(value).is_integer() else repr(float(value))
+
+
 def cmd_ai_backfill(args) -> int:
     """Import the ledger's history into Prometheus as dated blocks.
 
@@ -1987,7 +1998,8 @@ def cmd_ai_backfill(args) -> int:
                 for role in hu.BILLED_ROLES:
                     both = f'{{{tags},role="{role}"}}'
                     lines.append(f"aiusage_tokens_total{both} {acc[f'tok_{role}']:.0f} {stamp}")
-                    lines.append(f"aiusage_cost_usd_total{both} {acc[f'usd_{role}']:.6f} {stamp}")
+                    lines.append(f"aiusage_cost_usd_total{both} "
+                                 f"{_sample(acc[f'usd_{role}'])} {stamp}")
 
     body = ("# TYPE aiusage_cost_usd_total counter\n"
             "# TYPE aiusage_requests_total counter\n"

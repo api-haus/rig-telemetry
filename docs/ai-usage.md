@@ -534,6 +534,28 @@ exporter's own to record.
 `promtool tsdb create-blocks-from openmetrics` does the import. Prometheus
 needs a restart to notice new blocks, which the command does.
 
+### A backfilled sample must never sit above the live one
+
+The seam between imported blocks and live scrapes is one series, so the two
+values meet. Written to six decimal places, a backfilled sample rounded *up*:
+`2736.587147` against the live `2736.5871465`. Five ten-millionths of a cent,
+and Prometheus reads any decrease on a counter as a reset — so `increase()`
+added the whole counter back. Thirty-six series did it at one seam, and
+`increase(aiusage_cost_usd_total[7d])` came out at $32,124 against a lifetime
+total of $31,354 and a real week of $3,680.
+
+Two things follow, and both are in the code:
+
+- The backfill writes a cost exactly as the exporter writes it, full precision,
+  so the two agree instead of nearly agreeing.
+- **Nothing derives a window on these counters with `increase()`.** They are
+  recomputed from the ledger on every read, so a value can legitimately move
+  down when a rate changes. `sum(x) - sum(x offset 7d)` is the honest delta and
+  survives both. `rig:ai:cost_usd:today` and `:week` are written that way.
+
+An import made before this fix still holds its seam. `rig ai backfill --undo
+--since <window>` followed by a fresh `rig ai backfill` clears it.
+
 `--undo` deletes every `aiusage_*` sample in the window through the admin API.
 It takes the live exporter's samples in that window with it, because they are
 the same series — that is the point. Current totals survive: a counter carries
