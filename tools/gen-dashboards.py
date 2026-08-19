@@ -998,28 +998,36 @@ def picked(metric, *extra, pick=PICK):
     return f'{metric}{{{",".join((pick, *extra))}}}'
 
 
-# One hue per seller, one shade per window. A seller added to SUBSCRIPTIONS
-# takes the next hue with no edit here.
-QUOTA_HUES = ["orange", "purple", "green", "blue", "red", "yellow"]
+# A window's line and the darker twin its pace line is drawn in. Hues, not
+# shades of one hue: a seller owns several windows and they must not read as
+# one another.
+QUOTA_HUES = [("#73BF69", "#37872D"), ("#FF9830", "#C15C17"), ("#5794F2", "#1F60C4"),
+              ("#B877D9", "#8F3BB8"), ("#F2495C", "#C4162A"), ("#6ED0E0", "#1F8FA8"),
+              ("#FADE2A", "#B68F00"), ("#FF85C0", "#C43C8F"), ("#C0C7D4", "#6B7280"),
+              ("#2DD4BF", "#0F766E"), ("#A3E635", "#65A30D"), ("#818CF8", "#4338CA"),
+              ("#E879F9", "#A21CAF"), ("#38BDF8", "#0369A1"), ("#FB923C", "#C2410C"),
+              ("#FCA5A5", "#B91C1C")]
 
-# Grafana applies overrides in order and the last match wins, so the catch-all
-# shade is written before the windows that overrule it.
-QUOTA_SHADES = [(r".*", "dark-{hue}"), (r"weekly-.+", "super-light-{hue}"),
-                (r"weekly", "light-{hue}"), (r"session", "semi-dark-{hue}")]
+# Ranked, not merely listed: hues are handed out down this list, so the windows
+# every seller has take the ones that separate best.
+QUOTA_WINDOWS = [r"session", r"weekly", r"weekly-.+", r".*"]
 
 
 def quota_colours():
-    """One fixed colour per seller and window, carried by both of its lines.
+    """One hue per seller and window, its line bright and its pace line dark.
 
-    The actual line and its pace line differ only in style, so a pair reads as
-    one window and no two sellers are ever drawn in the same hue.
+    A pair reads as one window and no two windows share a hue. A seller added
+    to SUBSCRIPTIONS takes the next hues with no edit here.
     """
+    ranked = [(sub.name, window) for window in QUOTA_WINDOWS for sub in hq.SUBSCRIPTIONS]
+    hues = {key: QUOTA_HUES[i % len(QUOTA_HUES)] for i, key in enumerate(ranked)}
     out = []
-    for i, sub in enumerate(hq.SUBSCRIPTIONS):
-        hue = QUOTA_HUES[i % len(QUOTA_HUES)]
-        for window, shade in QUOTA_SHADES:
-            out.append(column(rf"^{sub.name} {window} (actual|even burn)$", matcher="byRegexp",
-                              color={"mode": "fixed", "fixedColor": shade.format(hue=hue)}))
+    # Grafana applies overrides in order and the last match wins, so the
+    # catch-all is written before the windows that overrule it.
+    for name, window in reversed(ranked):
+        for suffix, hue in zip(("actual", "even burn"), hues[(name, window)]):
+            out.append(column(rf"^{name} {window} {suffix}$", matcher="byRegexp",
+                              color={"mode": "fixed", "fixedColor": hue}))
     return out
 
 
