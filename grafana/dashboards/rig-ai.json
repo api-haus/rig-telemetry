@@ -436,16 +436,125 @@
       "id": 2
     },
     {
+      "type": "timeseries",
+      "title": "Quota left, against spending it evenly",
+      "description": "The dashed line is the window's own clock: what would be left had you started at the reset and spent evenly to the end, 100% down to 0% and back to 100%. The solid line is what is actually left. Above the dash is ahead of pace \u2014 the quota outlasts the window. Below it, the window outlasts the quota and you run dry early. Only windows whose seller declares a length can be paced.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rig-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "1 - aiusage_rate_limit_used_ratio{harness=~\"$harness\"}",
+          "legendFormat": "{{harness}} {{window}} actual",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "clamp((aiusage_rate_limit_reset_timestamp_seconds{harness=~\"$harness\"} - time()) / aiusage_rate_limit_window_seconds{harness=~\"$harness\"}, 0, 1)",
+          "legendFormat": "{{harness}} {{window}} even burn",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rig-prom"
+          },
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "axisSoftMax": 1
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0,
+          "max": 1,
+          "noValue": "Nothing to pace. A window needs both a reset time and a declared length, and not every seller states one."
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*even burn"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3
+    },
+    {
       "type": "row",
       "title": "API list value",
       "collapsed": false,
-      "id": 3,
+      "id": 4,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 16
       }
     },
     {
@@ -508,9 +617,9 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 9
+        "y": 17
       },
-      "id": 4
+      "id": 5
     },
     {
       "type": "stat",
@@ -584,9 +693,9 @@
         "h": 4,
         "w": 3,
         "x": 4,
-        "y": 9
+        "y": 17
       },
-      "id": 5
+      "id": 6
     },
     {
       "type": "stat",
@@ -648,9 +757,9 @@
         "h": 4,
         "w": 3,
         "x": 7,
-        "y": 9
+        "y": 17
       },
-      "id": 6
+      "id": 7
     },
     {
       "type": "stat",
@@ -724,9 +833,9 @@
         "h": 4,
         "w": 3,
         "x": 10,
-        "y": 9
+        "y": 17
       },
-      "id": 7
+      "id": 8
     },
     {
       "type": "stat",
@@ -788,9 +897,9 @@
         "h": 4,
         "w": 3,
         "x": 13,
-        "y": 9
+        "y": 17
       },
-      "id": 8
+      "id": 9
     },
     {
       "type": "stat",
@@ -864,9 +973,9 @@
         "h": 4,
         "w": 3,
         "x": 16,
-        "y": 9
+        "y": 17
       },
-      "id": 9
+      "id": 10
     },
     {
       "type": "stat",
@@ -928,9 +1037,9 @@
         "h": 4,
         "w": 2,
         "x": 19,
-        "y": 9
+        "y": 17
       },
-      "id": 10
+      "id": 11
     },
     {
       "type": "stat",
@@ -992,21 +1101,21 @@
         "h": 4,
         "w": 3,
         "x": 21,
-        "y": 9
+        "y": 17
       },
-      "id": 11
+      "id": 12
     },
     {
       "type": "row",
       "title": "Where the money goes",
       "collapsed": false,
-      "id": 12,
+      "id": 13,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 13
+        "y": 21
       }
     },
     {
@@ -1081,9 +1190,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 14
+        "y": 22
       },
-      "id": 13
+      "id": 14
     },
     {
       "type": "timeseries",
@@ -1157,9 +1266,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 14
+        "y": 22
       },
-      "id": 14
+      "id": 15
     },
     {
       "type": "timeseries",
@@ -1233,9 +1342,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 14
+        "y": 22
       },
-      "id": 15
+      "id": 16
     },
     {
       "type": "bargauge",
@@ -1324,9 +1433,9 @@
         "h": 9,
         "w": 8,
         "x": 0,
-        "y": 22
+        "y": 30
       },
-      "id": 16
+      "id": 17
     },
     {
       "type": "bargauge",
@@ -1415,9 +1524,9 @@
         "h": 9,
         "w": 8,
         "x": 8,
-        "y": 22
+        "y": 30
       },
-      "id": 17
+      "id": 18
     },
     {
       "type": "bargauge",
@@ -1506,21 +1615,21 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 22
+        "y": 30
       },
-      "id": 18
+      "id": 19
     },
     {
       "type": "row",
       "title": "Who did the work",
       "collapsed": false,
-      "id": 19,
+      "id": 20,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 39
       }
     },
     {
@@ -1595,9 +1704,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 40
       },
-      "id": 20
+      "id": 21
     },
     {
       "type": "timeseries",
@@ -1671,9 +1780,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 40
       },
-      "id": 21
+      "id": 22
     },
     {
       "type": "table",
@@ -1744,9 +1853,9 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 40
+        "y": 48
       },
-      "id": 22
+      "id": 23
     },
     {
       "type": "table",
@@ -1817,21 +1926,21 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 40
+        "y": 48
       },
-      "id": 23
+      "id": 24
     },
     {
       "type": "row",
       "title": "Tokens",
       "collapsed": false,
-      "id": 24,
+      "id": 25,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 57
       }
     },
     {
@@ -1905,9 +2014,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 50
+        "y": 58
       },
-      "id": 25
+      "id": 26
     },
     {
       "type": "timeseries",
@@ -1980,9 +2089,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 50
+        "y": 58
       },
-      "id": 26
+      "id": 27
     },
     {
       "type": "timeseries",
@@ -2051,9 +2160,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 58
+        "y": 66
       },
-      "id": 27
+      "id": 28
     },
     {
       "type": "timeseries",
@@ -2122,21 +2231,21 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 58
+        "y": 66
       },
-      "id": 28
+      "id": 29
     },
     {
       "type": "row",
       "title": "Subscription and coverage",
       "collapsed": false,
-      "id": 29,
+      "id": 30,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 66
+        "y": 74
       }
     },
     {
@@ -2207,9 +2316,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 67
+        "y": 75
       },
-      "id": 30
+      "id": 31
     },
     {
       "type": "timeseries",
@@ -2289,9 +2398,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 67
+        "y": 75
       },
-      "id": 31
+      "id": 32
     },
     {
       "type": "stat",
@@ -2357,9 +2466,9 @@
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 75
+        "y": 83
       },
-      "id": 32
+      "id": 33
     },
     {
       "type": "stat",
@@ -2429,9 +2538,9 @@
         "h": 4,
         "w": 6,
         "x": 6,
-        "y": 75
+        "y": 83
       },
-      "id": 33
+      "id": 34
     },
     {
       "type": "stat",
@@ -2501,9 +2610,9 @@
         "h": 4,
         "w": 6,
         "x": 12,
-        "y": 75
+        "y": 83
       },
-      "id": 34
+      "id": 35
     },
     {
       "type": "stat",
@@ -2565,9 +2674,9 @@
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 75
+        "y": 83
       },
-      "id": 35
+      "id": 36
     }
   ],
   "templating": {

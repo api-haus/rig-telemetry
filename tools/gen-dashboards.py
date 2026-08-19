@@ -140,9 +140,12 @@ def stat(L, title, expr, *, unit="short", w=3, h=4, desc="", thresholds=None,
     }, w, h)
 
 
-def column(name, **defaults):
-    """One column's own unit, thresholds or cell style, by its displayed name."""
-    return {"matcher": {"id": "byName", "options": name},
+def column(name, *, matcher="byName", **defaults):
+    """One field's own unit, thresholds or style, by its displayed name.
+
+    `matcher="byRegexp"` styles every series whose legend matches instead.
+    """
+    return {"matcher": {"id": matcher, "options": name},
             "properties": [{"id": k.rstrip("_").replace("_", "."), "value": v}
                            for k, v in defaults.items()]}
 
@@ -1022,6 +1025,28 @@ def subscriptions(L):
        desc="Read from the seller that meters each plan, so it falls for every device the "
             "account is signed in on. `measured` is how old the figure is: a plan is asked "
             "every few minutes, not every scrape.")
+
+    # The even burn is the window's own clock: how much of it is left in time.
+    # Spend uniformly from the reset and the quota tracks it exactly, so the
+    # gap between the two lines is the whole finding.
+    even = (f'clamp((aiusage_rate_limit_reset_timestamp_seconds{{{PICK_HARNESS}}} - time()) '
+            f'/ aiusage_rate_limit_window_seconds{{{PICK_HARNESS}}}, 0, 1)')
+    ts(L, "Quota left, against spending it evenly", [
+        (f'1 - aiusage_rate_limit_used_ratio{{{PICK_HARNESS}}}', "{{harness}} {{window}} actual"),
+        (even, "{{harness}} {{window}} even burn"),
+    ], unit="percentunit", min_=0, max_=1, w=24, h=8, legend_calcs=("last",),
+       no_value="Nothing to pace. A window needs both a reset time and a declared length, and "
+                "not every seller states one.",
+       desc="The dashed line is the window's own clock: what would be left had you started at "
+            "the reset and spent evenly to the end, 100% down to 0% and back to 100%. The solid "
+            "line is what is actually left. Above the dash is ahead of pace — the quota outlasts "
+            "the window. Below it, the window outlasts the quota and you run dry early. Only "
+            "windows whose seller declares a length can be paced.")
+    L.panels[-1]["fieldConfig"]["overrides"] = [
+        column(".*even burn", matcher="byRegexp",
+               custom_lineStyle={"fill": "dash", "dash": [10, 10]},
+               custom_lineWidth=1, custom_fillOpacity=0),
+    ]
 
 
 def ai():

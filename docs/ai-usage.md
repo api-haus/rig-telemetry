@@ -397,6 +397,25 @@ the Fable weekly share, and how old the figure is. Six queries joined on
 `harness` and `plan`, one per fact, so a plan that meters none of a given
 window leaves a blank cell rather than dropping off the board.
 
+Beneath it, **Quota left, against spending it evenly** draws each window twice.
+The dashed line is the window's own clock — what would be left had you started
+at the reset and spent uniformly to the end, falling 100% to 0% and snapping
+back to 100% when the window rolls over:
+
+```promql
+clamp((aiusage_rate_limit_reset_timestamp_seconds - time())
+      / aiusage_rate_limit_window_seconds, 0, 1)
+```
+
+The solid line is what is actually left. Above the dash the quota outlasts the
+window; below it the window outlasts the quota and you run dry early. The
+distance between them is the whole finding, and it is the same figure in both
+units — a percentage of the quota, and a percentage of the time.
+
+Only a window whose seller declares a length can be paced. Kimi's weekly block
+declares none and Claude's Fable share carries no reset time, so neither gets a
+dashed line rather than getting a guessed one.
+
 ---
 
 ## Metrics
