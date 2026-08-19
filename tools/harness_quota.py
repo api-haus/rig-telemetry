@@ -478,6 +478,29 @@ SUBSCRIPTIONS: list[type[Subscription]] = [ClaudeCode, Codex, KimiCode, ZaiCodin
 # cache, so the scrape path and the CLI share one reading
 # --------------------------------------------------------------------------
 
+def plan_names() -> dict[str, str]:
+    """What you call each plan, where the seller's own word is not it.
+
+    Moonshot answers `LEVEL_STANDARD` for a plan sold as Vivace, and no
+    endpoint or file on this machine carries the retail name — so it is stated
+    once rather than guessed, one `<harness><tab><name>` line per plan in
+    `~/.config/rig-telemetry/plans.tsv`. Read through HOME, because the
+    exporter's container reaches your home at another path.
+    """
+    out = {}
+    try:
+        text = (HOME / ".config" / "rig-telemetry" / "plans.tsv").read_text()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        if line.startswith("#") or "\t" not in line:
+            continue
+        harness, name = line.split("\t", 1)
+        if harness.strip() and name.strip():
+            out[harness.strip()] = name.strip()
+    return out
+
+
 def cache_path() -> pathlib.Path:
     return CACHE / "quota.json"
 
@@ -544,6 +567,12 @@ def read_all(max_age: float = MAX_AGE, only: str = "") -> list[Quota]:
         quota.windows = live
     cached.update({q.harness: q for q in out})
     save_cache(cached)
+    # After the cache is written, so the file holds what the seller said and
+    # deleting the override reverts the name on the next read rather than the
+    # next fetch.
+    names = plan_names()
+    for quota in out:
+        quota.plan = names.get(quota.harness, quota.plan)
     return out
 
 

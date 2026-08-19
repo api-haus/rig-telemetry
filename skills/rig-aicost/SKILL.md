@@ -73,6 +73,11 @@ Two things the table says that are easy to skip:
 - **`from`** — `provider` was asked of the seller; `harness` is what the
   harness itself last wrote, which is only as fresh as its last run.
 
+The `plan` column is the seller's own tier word, not the name on the invoice —
+Moonshot says `standard` for a plan sold as Vivace. One
+`<harness><tab><name>` line in `~/.config/rig-telemetry/plans.tsv` renames it
+everywhere. Never silently substitute a nicer name for what the seller said.
+
 If a plan reports nothing, `rig ai limits` prints why on its own line — signed
 out, token expired, or an account on no metered plan. Read that sentence out
 rather than reporting the plan as unused. An expired Kimi token means the CLI

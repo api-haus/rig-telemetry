@@ -354,6 +354,26 @@ this repo.
 declares one. Kimi's plan window declares none — its reset time is the fact,
 and the name is the one Kimi's own CLI prints.
 
+### When the plan's name is not the seller's word for it
+
+The `plan` column is whatever the seller answers with, and that is a tier in
+its own vocabulary rather than the name on the invoice. Moonshot returns
+`LEVEL_STANDARD` for a plan sold as **Vivace**, and no endpoint or file on this
+machine carries the retail name.
+
+So it is stated once rather than guessed, one line per plan:
+
+```
+~/.config/rig-telemetry/plans.tsv
+
+kimi-code	Vivace
+```
+
+A harness name, a tab, the name you know the plan by. The seller's own word
+stands wherever no line names it, and deleting a line puts it back on the next
+read. The file is read through the same home the exporter mounts, so the
+dashboard and `rig ai limits` agree.
+
 ### Two rules that keep a number from lying
 
 **A window whose reset has passed is dropped, whatever it said.** After a reset
