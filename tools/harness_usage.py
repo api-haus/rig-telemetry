@@ -109,8 +109,13 @@ def price_key(model: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in model)
 
 
-def load_overrides() -> dict[str, list[tuple[str, str, int]]]:
-    """Model name -> the lines filed under it, as (value, source, rank).
+def load_overrides() -> dict[str, list[tuple[str, str, int, str]]]:
+    """Model name -> the lines filed under it, as (value, source, rank, name).
+
+    The key is the name with non-alphanumerics flattened, because an env var
+    can only address it that way. `name` is the model as it was actually
+    written, which is what anything shown to a human should print — an env var
+    override has only the flattened form to give.
 
     A harness names its models however it likes and some of those names reach
     no catalogue entry by any transformation, so this file states what a name
@@ -121,7 +126,7 @@ def load_overrides() -> dict[str, list[tuple[str, str, int]]]:
     prices — a rate that starts on a date, or only inside certain hours. The
     rank is how near the source is; `lookup` decides which line answers.
     """
-    out: dict[str, list[tuple[str, str, int]]] = {}
+    out: dict[str, list[tuple[str, str, int, str]]] = {}
     for rank, path in enumerate((SEED, CONFIG / "prices.tsv")):
         try:
             text = path.read_text()
@@ -136,11 +141,11 @@ def load_overrides() -> dict[str, list[tuple[str, str, int]]]:
                 name, _, value = line.partition(" ")
             if value.strip():
                 out.setdefault(price_key(name.strip()), []).append(
-                    (value.strip(), str(path), rank))
+                    (value.strip(), str(path), rank, name.strip()))
     for key, value in os.environ.items():
         if key.startswith("RIG_AI_PRICE_") and value.strip():
             out.setdefault(key[len("RIG_AI_PRICE_"):], []).append(
-                (value.strip(), "environment", 2))
+                (value.strip(), "environment", 2, key[len("RIG_AI_PRICE_"):]))
     return out
 
 
@@ -264,7 +269,7 @@ class Prices:
         hour of the day changes.
         """
         out = []
-        for value, source, rank in self.overrides.get(price_key(model), ()):
+        for value, source, rank, _ in self.overrides.get(price_key(model), ()):
             try:
                 head, clauses = split_clauses(value)
             except ValueError:

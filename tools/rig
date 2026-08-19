@@ -1610,7 +1610,7 @@ def _clocked_rates(hu) -> None:
     """
     rows = []
     for key, lines in sorted(hu.load_overrides().items()):
-        for value, source, _ in lines:
+        for value, source, _, name in lines:
             try:
                 head, clause = hu.split_clauses(value)
             except ValueError:
@@ -1619,7 +1619,7 @@ def _clocked_rates(hu) -> None:
                 continue
             hours = _hour_ranges(clause["at"]) if clause["at"] else "every hour"
             start = datetime.fromtimestamp(clause["from"], timezone.utc) if clause["from"] else None
-            rows.append((key.replace("_", "-"), head,
+            rows.append((name, head,
                          start.strftime("%Y-%m-%d %H:%MZ") if start else "always",
                          hours, clause["on"] or "any provider",
                          pathlib.Path(source).name if source != "environment" else source))

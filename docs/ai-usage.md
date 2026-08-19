@@ -208,13 +208,22 @@ moves twice a year. `rig ai clock` renders it at the offset in force on the day
 it is run and names where it goes on the other side of the year, rather than
 storing one offset and being an hour wrong for six months.
 
-The "Rig — AI Spend" dashboard carries two annotations for this, generated from
-the same `share/prices.tsv` lines and toggleable at the top of the board:
+The "Rig — AI Spend" dashboard carries two annotations per clock, generated
+from the same `share/prices.tsv` lines and toggleable at the top of the board:
 
 | Annotation | |
 | --- | --- |
-| `<seller> peak hours` | a band over every hour billed at the peak rate |
-| `<seller> rate change` | a vertical line at each flip, four a day here |
+| `<sellers> peak hours` | a band over every hour billed at the peak rate |
+| `<sellers> rate change` | a vertical line at each flip, four a day here |
+
+**One clock, one pair — not one per seller.** OpenRouter passes DeepSeek's own
+peak hours through unchanged for the 0813 build, so keying these by seller drew
+the identical band and the identical flip line twice, under two names, and
+neither name said which model had repriced. They are keyed by the clock itself
+— its hours and its start instant — so sellers sharing one share its markers
+and the title reads `deepseek + openrouter`. The models are the hover text,
+written the way the file writes them, because a seller sells many models and
+only some of them move.
 
 Both are built from PromQL's `hour()` rather than from a recording rule, so
 they mark a week that has already been paid for — a rule would only know the

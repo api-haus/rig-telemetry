@@ -229,26 +229,31 @@ BUILT_IN_ANNOTATION = {
 }
 
 
-def peak_windows() -> dict[str, tuple[tuple[int, ...], float]]:
-    """Each seller's dearer hours, read from the file the ledger prices with.
+def peak_windows() -> list[tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...], float]]:
+    """Each distinct clock, with the sellers and models billed on it.
 
     The clock is stated once, in share/prices.tsv. A marker drawn from a second
     copy of it is a marker that will one day disagree with the bill.
+
+    Keyed by the clock rather than by the seller: OpenRouter passes DeepSeek's
+    own peak hours through unchanged, so keying by seller drew one band twice
+    under two names, neither of which said which model had repriced.
     """
-    out: dict[str, tuple[set, float]] = {}
+    out: dict[tuple, tuple[set, set]] = {}
     for key, lines in hu.load_overrides().items():
-        for value, _, _ in lines:
+        for value, _, _, name in lines:
             try:
                 _, clause = hu.split_clauses(value)
             except ValueError:
                 continue
             if not clause["at"]:
                 continue
-            seller = clause["on"] or key.replace("_", "-")
-            begins = clause["from"] or 0.0
-            hours, start = out.get(seller, (set(), begins))
-            out[seller] = (hours | set(clause["at"]), min(start, begins))
-    return {k: (tuple(sorted(h)), s) for k, (h, s) in sorted(out.items())}
+            model = name
+            signature = (tuple(sorted(set(clause["at"]))), clause["from"] or 0.0)
+            sellers, models = out.get(signature, (set(), set()))
+            out[signature] = (sellers | {clause["on"] or model}, models | {model})
+    return [(tuple(sorted(sellers)), tuple(sorted(models)), hours, start)
+            for (hours, start), (sellers, models) in sorted(out.items())]
 
 
 def hour_spans(hours) -> list[list[int]]:
@@ -262,25 +267,30 @@ def hour_spans(hours) -> list[list[int]]:
     return spans
 
 
-def _annotation(name, expr, colour, step) -> dict:
+def _annotation(name, expr, colour, step, text="") -> dict:
     # useValueForTime must stay a JSON boolean: Grafana tests it for truth, and
     # the string "false" would send every marker to 1970.
     return {
         "name": name, "datasource": DS, "enable": True, "hide": False,
         "iconColor": colour, "expr": expr, "step": step,
         "target": {"expr": expr, "refId": "peak", "interval": step, "legendFormat": ""},
-        "titleFormat": name, "textFormat": "", "tagKeys": "",
+        "titleFormat": name, "textFormat": text, "tagKeys": "",
         "useValueForTime": False,
     }
 
 
-def peak_annotations(seller, hours, start) -> list[dict]:
-    """A band over the hours a seller charges peak in, and a line at each flip.
+def peak_annotations(sellers, models, hours, start) -> list[dict]:
+    """A band over the hours this clock charges peak in, and a line at each flip.
 
     Both are built from hour(), not from a recording rule: a rule would only
     mark the hours since it was added, and the question is always about a week
     that has already been paid for. Both are toggleable at the top of the board.
+
+    The title names who bills on the clock, and the hover text names what — a
+    seller sells many models and only some of them move.
     """
+    who = " + ".join(sellers)
+    what = ", ".join(models)
     spans = hour_spans(hours)
     began = f"(vector(time()) >= {int(start)})"
     inside = " or ".join(f"(hour() >= {a} and hour() < {b})" for a, b in spans)
@@ -291,11 +301,11 @@ def peak_annotations(seller, hours, start) -> list[dict]:
     flips = sorted({s % 24 for span in spans for s in span})
     at_flip = " or ".join(f"hour() == {h}" for h in flips)
     return [
-        _annotation(f"{seller} peak hours", f"vector(1) and (({inside}) and {began})",
-                    "rgba(255, 152, 0, 0.20)", "300s"),
-        _annotation(f"{seller} rate change",
+        _annotation(f"{who} peak hours", f"vector(1) and (({inside}) and {began})",
+                    "rgba(255, 152, 0, 0.20)", "300s", text=what),
+        _annotation(f"{who} rate change",
                     f"vector(1) and ((({at_flip}) and minute() < 15) and {began})",
-                    "rgb(255, 152, 0)", "900s"),
+                    "rgb(255, 152, 0)", "900s", text=what),
     ]
 
 
@@ -1185,8 +1195,8 @@ def ai():
                      "list rates. Money, tokens, models, projects, and the delegated share. The "
                      "dropdowns narrow every panel to one harness, provider or model.",
                      L, time_from="now-7d", refresh="1m", tags=["ai", "cost"],
-                     annotations=[a for seller, (hours, start) in peak_windows().items()
-                                  for a in peak_annotations(seller, hours, start)],
+                     annotations=[a for clock in peak_windows()
+                                  for a in peak_annotations(*clock)],
                      variables=[
                          filter_var("harness", "Harness", "aiusage_cost_usd_total"),
                          filter_var("provider", "Provider", "aiusage_cost_usd_total",
