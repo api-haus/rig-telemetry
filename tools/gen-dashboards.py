@@ -140,18 +140,35 @@ def stat(L, title, expr, *, unit="short", w=3, h=4, desc="", thresholds=None,
     }, w, h)
 
 
+def column(name, **defaults):
+    """One column's own unit, thresholds or cell style, by its displayed name."""
+    return {"matcher": {"id": "byName", "options": name},
+            "properties": [{"id": k.rstrip("_").replace("_", "."), "value": v}
+                           for k, v in defaults.items()]}
+
+
 def table(L, title, queries, *, w=12, h=9, desc="", unit="short", sort_desc=True,
-          rename=None, hide=("Time", "__name__", "instance", "job", "host")):
+          rename=None, hide=("Time", "__name__", "instance", "job", "host"),
+          merge=False, order=None, columns=(), sort_by="Value", no_value=None):
     excludes = {k: True for k in hide}
-    organize = {"excludeByName": excludes, "renameByName": rename or {}, "indexByName": {}}
+    # Every key here is the field's name *before* the rename, `indexByName`
+    # included — a column ordered by the name it ends up showing is ignored.
+    organize = {"excludeByName": excludes, "renameByName": rename or {},
+                "indexByName": {name: i for i, name in enumerate(order or [])}}
+    # One query per fact, joined on the labels they share: every column of a
+    # row comes from its own series, and a missing one leaves a blank rather
+    # than dropping the row.
+    steps_ = [{"id": "merge", "options": {}}] if merge else []
     return L.place({
         "type": "table", "title": title, "description": desc, "datasource": DS,
-        "targets": [dict(t, format="table", instant=True) for t in targets(queries)],
-        "transformations": [{"id": "organize", "options": organize}],
-        "fieldConfig": {"defaults": {"unit": unit, "custom": {"align": "auto", "cellOptions": {"type": "auto"}}},
-                        "overrides": []},
+        "targets": [dict(t, format="table", instant=True, range=False) for t in targets(queries)],
+        "transformations": steps_ + [{"id": "organize", "options": organize}],
+        "fieldConfig": {"defaults": {"unit": unit,
+                                     "custom": {"align": "auto", "cellOptions": {"type": "auto"}},
+                                     **({"noValue": no_value} if no_value else {})},
+                        "overrides": list(columns)},
         "options": {"showHeader": True,
-                    "sortBy": [{"displayName": "Value", "desc": sort_desc}],
+                    "sortBy": [{"displayName": sort_by, "desc": sort_desc}],
                     "footer": {"show": False}},
     }, w, h)
 
@@ -967,6 +984,46 @@ def picked(metric, *extra, pick=PICK):
     return f'{metric}{{{",".join((pick, *extra))}}}'
 
 
+def subscriptions(L):
+    """One line per plan: what each window has left, and when it resets.
+
+    Six queries rather than one, joined on the labels they share. Each window
+    is its own series, so a plan that meters none of them leaves a blank cell
+    instead of dropping the plan off the board.
+    """
+    left = f'1 - aiusage_rate_limit_used_ratio{{{PICK_HARNESS}}}'
+    reset = f'rig:ai:limit_reset_in_seconds{{{PICK_HARNESS}}}'
+    by = "max by (harness, plan)"
+    names = ["session left", "session resets in", "weekly left", "weekly resets in",
+             "fable weekly left", "measured"]
+    headroom = steps(("yellow", 0.15), ("green", 0.4), base="red")
+    table(L, "Every plan on one line", [
+        f'{by} ({left[:-1]},window="session"}})',
+        f'{by} ({reset[:-1]},window="session"}})',
+        f'{by} ({left[:-1]},window="weekly"}})',
+        f'{by} ({reset[:-1]},window="weekly"}})',
+        f'{by} ({left[:-1]},window="weekly-fable"}})',
+        f'time() - {by} (aiusage_rate_limit_seen_timestamp_seconds{{{PICK_HARNESS}}})',
+    ], w=24, h=7, merge=True, sort_by="provider", sort_desc=False,
+       rename={"harness": "provider",
+               **{f"Value #{chr(65 + i)}": name for i, name in enumerate(names)}},
+       order=["harness", "plan", *(f"Value #{chr(65 + i)}" for i in range(len(names)))],
+       columns=[column(name, unit="percentunit", min=0, max=1, decimals=0,
+                       color={"mode": "thresholds"}, thresholds=headroom,
+                       custom_cellOptions={"type": "gauge", "mode": "gradient"})
+                for name in ("session left", "weekly left", "fable weekly left")]
+               + [column(name, unit="s", decimals=0)
+                  for name in ("session resets in", "weekly resets in")]
+               + [column("measured", unit="s", decimals=0,
+                         color={"mode": "thresholds"},
+                         thresholds=steps(("yellow", 900), ("red", 3600)))],
+       no_value="No plan answered. `rig ai limits` says whether that is a signed-out harness, "
+                "an expired token, or an account on no metered plan.",
+       desc="Read from the seller that meters each plan, so it falls for every device the "
+            "account is signed in on. `measured` is how old the figure is: a plan is asked "
+            "every few minutes, not every scrape.")
+
+
 def ai():
     L = Layout()
     money = picked("aiusage_cost_usd_total")
@@ -975,6 +1032,9 @@ def ai():
     billable = picked("aiusage_tokens_total", 'role!="reasoning"')
     cache_share = f"sum({reads}) / clamp_min(sum({sent}), 1)"
     per_million = f"sum({money}) / clamp_min(sum({billable}) / 1e6, 1e-9)"
+    L.row("Subscriptions — what is left, and when it comes back")
+    subscriptions(L)
+
     L.row("API list value")
     stat(L, "All recorded", f"sum({money})", unit="currencyUSD", w=4, decimals=0,
          desc=LIST_PRICE + " Counts every session file still on disk.")

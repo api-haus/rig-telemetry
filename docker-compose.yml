@@ -188,6 +188,9 @@ services:
       RIG_AI_PORT: "13360"
       RIG_AI_INTERVAL: "${RIG_AI_INTERVAL:-60}"
       RIG_AI_QUOTA_INTERVAL: "${RIG_AI_QUOTA_INTERVAL:-300}"
+      # A GLM Coding Plan key is often only an export, with no file to mount.
+      ZAI_API_KEY: "${ZAI_API_KEY:-}"
+      ZHIPU_API_KEY: "${ZHIPU_API_KEY:-}"
       RIG_AI_TOP_PROJECTS: "${RIG_AI_TOP_PROJECTS:-80}"
     volumes:
       - ./tools:/tools:ro

@@ -1470,7 +1470,7 @@ def _limits_recorded(args) -> int:
         where = ",".join(f'{k}="{m.get(k)}"' for k in ("harness", "window", "plan", "source"))
         reset = scalar(f"aiusage_rate_limit_reset_timestamp_seconds{{{where}}}", args.at)
         seen = scalar(f'aiusage_rate_limit_seen_timestamp_seconds{{harness="{m.get("harness")}"'
-                      f',source="{m.get("source")}"}}', args.at)
+                      f',plan="{m.get("plan")}",source="{m.get("source")}"}}', args.at)
         used = float(s["value"][1])
         # Shortest window first, the way the live table orders them.
         rank = scalar(f"aiusage_rate_limit_window_seconds{{{where}}}", args.at)

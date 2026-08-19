@@ -185,8 +185,8 @@ $ rig ai limits
   kimi-code    standard  weekly        24.0%  76.0%   1 day, 17:42:46   0:00:07 ago  provider
 ```
 
-Claude Code, Codex and Kimi Code, each on the endpoint its own `/usage` command
-reads. A window whose reset has passed is dropped rather than shown stale, and
+Claude Code, Codex, Kimi Code and Z.ai's GLM Coding Plan, each on the endpoint
+its own usage command reads. A window whose reset has passed is dropped rather than shown stale, and
 a seller that stops answering keeps its last figure with the failure printed
 beside it.
 

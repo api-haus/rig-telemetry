@@ -312,12 +312,26 @@ command calls.
 | Claude Code | `~/.claude/.credentials.json` | `api.anthropic.com/api/oauth/usage` |
 | Codex | `~/.codex/auth.json` | `chatgpt.com/backend-api/wham/usage` |
 | Kimi Code | `~/.kimi-code/credentials/kimi-code.json` | `api.kimi.com/coding/v1/usages` |
+| Z.ai GLM Coding Plan | OpenCode's `auth.json`, Claude Code's `settings.json`, or `$ZAI_API_KEY` | `api.z.ai/api/monitor/usage/quota/limit` |
 
 **Read-only, always.** A refresh rotates the refresh token with it, so writing
 one of these files back would sign out whatever session holds the old one. An
 expired token is reported as expired, with the command that refreshes it. Kimi
 Code's token lasts fifteen minutes and only its CLI rewrites the file, so an
 idle machine reports the expiry rather than a figure.
+
+Z.ai is the odd one, and its `harness` label names the seller rather than a
+program. A GLM Coding Plan key is pointed at whatever tool you like, so it is
+looked for wherever those tools keep it — OpenCode's `auth.json` under any of
+the names it files Z.ai under, Claude Code's `settings.json` when its
+`ANTHROPIC_BASE_URL` points at Z.ai, then the environment. The exporter cannot
+read your shell, so a key that lives only in an export needs `ZAI_API_KEY` in
+`.env` for the container to see it.
+
+Two traps there, both measured rather than assumed. The endpoint answers
+**HTTP 200 on failure** and puts the verdict in the body, so the status line
+proves nothing — a key with no coding plan returns `code: 500` inside a 200.
+And the header takes the **bare key**: a `Bearer` prefix is rejected.
 
 Codex is the one plan with two ways to learn the same windows. The endpoint
 needs `auth.json`, which only a ChatGPT login writes — a Codex driven by an API
@@ -355,6 +369,14 @@ plan read four hours ago is a different fact from one read now.
 `rig ai doctor` lists every plan, how many windows it answered with, and the
 exact sentence for each one that answered with none.
 
+### On the dashboard
+
+**Rig — AI Spend** opens with a row that puts every plan on one line:
+provider, plan, session left, session resets in, weekly left, weekly resets in,
+the Fable weekly share, and how old the figure is. Six queries joined on
+`harness` and `plan`, one per fact, so a plan that meters none of a given
+window leaves a blank cell rather than dropping off the board.
+
 ---
 
 ## Metrics
@@ -376,6 +398,7 @@ whole machine's hardware telemetry.
 | `aiusage_rate_limit_used_ratio` | `harness`, `window`, `plan`, `source` | Subscription window consumed |
 | `aiusage_rate_limit_reset_timestamp_seconds` | same | When that window resets |
 | `aiusage_rate_limit_window_seconds` | same | How long it is, where the seller declares a length |
+| `aiusage_rate_limit_seen_timestamp_seconds` | `harness`, `plan`, `source` | When the figures were true |
 | `aiusage_rate_limit_readable` | `harness` | 1 when the plan answered this pass |
 | `aiusage_source_files` / `aiusage_source_installed` | `harness` | Coverage |
 

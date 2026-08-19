@@ -168,7 +168,7 @@ harness exporter:
 | Host | Carries | Why |
 | --- | --- | --- |
 | `models.dev` | nothing of yours | the price catalogue, refetched weekly |
-| `api.anthropic.com`, `chatgpt.com`, `api.kimi.com` | the harness's own OAuth token | what each subscription has left |
+| `api.anthropic.com`, `chatgpt.com`, `api.kimi.com`, `api.z.ai` | the plan's own key or OAuth token | what each subscription has left |
 
 The three usage endpoints are the same ones each harness's own `/usage` command
 calls, with the same credential, and nothing is sent but that token. The files

@@ -115,10 +115,14 @@ def number(value) -> float | None:
         return None
 
 
-def get(url: str, token: str, headers: dict[str, str], what: str) -> dict:
-    """One GET with a bearer token, with every failure named in one sentence."""
+def get(url: str, token: str, headers: dict[str, str], what: str,
+        scheme: str = "Bearer ") -> dict:
+    """One GET with a token, with every failure named in one sentence.
+
+    `scheme` is empty for a seller that wants the bare token in the header.
+    """
     req = urllib.request.Request(url, headers={"Accept": "application/json",
-                                               "Authorization": f"Bearer {token}", **headers})
+                                               "Authorization": f"{scheme}{token}", **headers})
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
             return json.loads(res.read().decode())
@@ -377,7 +381,97 @@ class Codex(Subscription):
             return
 
 
-SUBSCRIPTIONS: list[type[Subscription]] = [ClaudeCode, Codex, KimiCode]
+class ZaiCoding(Subscription):
+    """Z.ai's GLM Coding Plan, at the endpoint its own quota monitor reads.
+
+    The odd one here: a plan bought from a seller rather than a harness. The
+    key is pointed at whatever tool you like — Claude Code, OpenCode, ZCode —
+    so the credential is looked for wherever those keep it, and the `harness`
+    label names the seller instead of a program.
+
+    Two traps, both measured. The endpoint answers HTTP 200 on failure and puts
+    the verdict in the body, so the status line proves nothing. And the header
+    takes the bare key: a `Bearer` prefix is rejected.
+    """
+    name = "zai"
+    # `unit` is an enum the seller does not publish. Only these two are known
+    # from a real response, so nothing else is given a length it did not state.
+    units = {3: 3600, 6: WEEKLY_SECONDS}
+    providers = ("zai-coding-plan", "zai", "z-ai", "z.ai", "zhipu", "zhipuai")
+
+    def base(self, cn: bool) -> str:
+        return os.environ.get("RIG_AI_ZAI_BASE") or (
+            "https://open.bigmodel.cn" if cn else "https://api.z.ai")
+
+    def token(self) -> tuple[str, bool] | None:
+        """The key and whether it is the mainland account, from wherever it is.
+
+        OpenCode keeps it in its own auth file, Claude Code in the env block of
+        its settings, and a shell may simply export it.
+        """
+        auth = HOME / ".local" / "share" / "opencode" / "auth.json"
+        try:
+            entries = json.loads(auth.read_text())
+        except (OSError, ValueError):
+            entries = {}
+        for name in self.providers:
+            key = (entries.get(name) or {}).get("key") if isinstance(entries.get(name), dict) else None
+            if key:
+                return key, name.startswith("zhipu")
+        env = self._claude_env()
+        url = env.get("ANTHROPIC_BASE_URL") or ""
+        if ("z.ai" in url or "bigmodel" in url) and env.get("ANTHROPIC_AUTH_TOKEN"):
+            return env["ANTHROPIC_AUTH_TOKEN"], "bigmodel" in url
+        for name, cn in (("ZAI_API_KEY", False), ("ZHIPU_API_KEY", True),
+                         ("ZHIPUAI_API_KEY", True)):
+            if os.environ.get(name):
+                return os.environ[name], cn
+        return None
+
+    @staticmethod
+    def _claude_env() -> dict:
+        try:
+            return json.loads((HOME / ".claude" / "settings.json").read_text()).get("env") or {}
+        except (OSError, ValueError, AttributeError):
+            return {}
+
+    def installed(self) -> bool:
+        return self.token() is not None
+
+    def read(self) -> Quota:
+        found = self.token()
+        if not found:
+            raise Unreadable("no GLM Coding Plan key in OpenCode, Claude Code or the environment")
+        key, cn = found
+        data = get(f"{self.base(cn)}/api/monitor/usage/quota/limit", key,
+                   {"Accept-Language": "en-US,en"}, "Z.ai", scheme="")
+        if not data.get("success") or number(data.get("code")) not in (None, 200):
+            said = str(data.get("msg") or "no reason given")
+            raise Unreadable("this key has no GLM Coding Plan" if "coding plan" in said
+                             else f"Z.ai said: {said}")
+        windows = []
+        for limit in (data.get("data") or {}).get("limits") or []:
+            percent = number(limit.get("percentage"))
+            if percent is None:
+                continue
+            if limit.get("type") == "TOKENS_LIMIT":
+                unit, count = number(limit.get("unit")), number(limit.get("number"))
+                seconds = None if unit is None or count is None else \
+                    (self.units[int(unit)] * count if int(unit) in self.units else None)
+                label = name_window(seconds, f"tokens-unit{unit:g}-{count:g}"
+                                    if unit is not None and count is not None else "tokens")
+            elif limit.get("type") == "TIME_LIMIT":
+                label, seconds = "mcp-monthly", None
+            else:
+                continue
+            windows.append(Window(label, min(1.0, max(0.0, percent / 100)),
+                                  epoch(limit.get("nextResetTime")), seconds))
+        if not windows:
+            raise Unreadable("the plan reports no metered window")
+        return Quota(harness=self.name, measured=time.time(), windows=windows)
+
+
+SUBSCRIPTIONS: list[type[Subscription]] = [ClaudeCode, Codex, KimiCode, ZaiCoding]
 
 
 # --------------------------------------------------------------------------
@@ -469,6 +563,9 @@ def gauges(quotas: list[Quota]) -> list[tuple[str, dict[str, str], float]]:
                 out.append(("aiusage_rate_limit_reset_timestamp_seconds", tags, window.resets_at))
             if window.seconds:
                 out.append(("aiusage_rate_limit_window_seconds", tags, window.seconds))
+        # Carries `plan` although it is constant per harness: every other
+        # window series does, and a dashboard joins these frames on that pair.
         out.append(("aiusage_rate_limit_seen_timestamp_seconds",
-                    {"harness": quota.harness, "source": quota.source}, quota.measured))
+                    {"harness": quota.harness, "plan": quota.plan, "source": quota.source},
+                    quota.measured))
     return out

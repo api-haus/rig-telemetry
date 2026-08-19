@@ -1823,7 +1823,7 @@
             "uid": "rig-prom"
           },
           "editorMode": "code",
-          "range": true,
+          "range": false,
           "format": "table",
           "instant": true
         }

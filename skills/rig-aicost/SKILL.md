@@ -1,6 +1,6 @@
 ---
 name: rig-aicost
-description: Report what AI coding harnesses cost, in tokens and in API-list dollars, across Claude Code, Codex, Kimi Code, OpenCode, pi, Qwen Code, dsh, Gemini CLI, Goose, Crush, Copilot CLI and droid, and what each subscription has left of its session, weekly and model-scoped windows. Use when the user asks how much they spent on AI, what a session or project cost, where the tokens went, which model or subagent is expensive, whether context is being re-read, how much of a plan is used or left, when a limit resets, whether they are about to run out, or asks to compare harnesses, providers or plans. Also use before claiming any AI usage figure, and when the user mentions token burn, cache reads, cost per turn, or "is this worth it on the API".
+description: Report what AI coding harnesses cost, in tokens and in API-list dollars, across Claude Code, Codex, Kimi Code, OpenCode, pi, Qwen Code, dsh, Gemini CLI, Goose, Crush, Copilot CLI and droid, and what each subscription has left of its session, weekly and model-scoped windows — Claude Code, Codex, Kimi Code and Z.ai's GLM Coding Plan. Use when the user asks how much they spent on AI, what a session or project cost, where the tokens went, which model or subagent is expensive, whether context is being re-read, how much of a plan is used or left, when a limit resets, whether they are about to run out, or asks to compare harnesses, providers or plans. Also use before claiming any AI usage figure, and when the user mentions token burn, cache reads, cost per turn, or "is this worth it on the API".
 ---
 
 # rig-aicost
@@ -59,7 +59,8 @@ rig ai limits
 The percentages come from the seller that meters the plan, across **every
 device the account is signed in on** — not from this machine's tokens. Claude
 Code reports a 5-hour session window, a weekly window, and a weekly window
-scoped to Fable; Codex and Kimi Code report session and weekly.
+scoped to Fable; Codex, Kimi Code and Z.ai report session and weekly, and Z.ai
+adds a monthly MCP window.
 
 When answering "am I about to run out", quote the window, the percentage left
 and the reset time together. A window at 90% that resets in twenty minutes is
