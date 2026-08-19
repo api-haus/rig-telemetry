@@ -446,7 +446,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "1 - aiusage_rate_limit_used_ratio{harness=~\"$harness\"}",
+          "expr": "max by (harness, window) (1 - aiusage_rate_limit_used_ratio{harness=~\"$harness\"})",
           "legendFormat": "{{harness}} {{window}} actual",
           "datasource": {
             "type": "prometheus",
@@ -457,7 +457,7 @@
         },
         {
           "refId": "B",
-          "expr": "clamp((aiusage_rate_limit_reset_timestamp_seconds{harness=~\"$harness\"} - time()) / aiusage_rate_limit_window_seconds{harness=~\"$harness\"}, 0, 1)",
+          "expr": "((max by (harness, window) (last_over_time(aiusage_rate_limit_reset_timestamp_seconds{harness=~\"$harness\"}[7d]))) - time()) / (max by (harness, window) (last_over_time(aiusage_rate_limit_window_seconds{harness=~\"$harness\"}[7d]))) - floor(((max by (harness, window) (last_over_time(aiusage_rate_limit_reset_timestamp_seconds{harness=~\"$harness\"}[7d]))) - time()) / (max by (harness, window) (last_over_time(aiusage_rate_limit_window_seconds{harness=~\"$harness\"}[7d]))))",
           "legendFormat": "{{harness}} {{window}} even burn",
           "datasource": {
             "type": "prometheus",
@@ -491,7 +491,7 @@
           },
           "min": 0,
           "max": 1,
-          "noValue": "Nothing to pace. A window needs both a reset time and a declared length, and not every seller states one."
+          "noValue": "No figure. A pace line needs a reset and a length; an actual line needs a reading whose window has not reset since the seller last answered."
         },
         "overrides": [
           {

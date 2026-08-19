@@ -422,14 +422,35 @@ at the reset and spent uniformly to the end, falling 100% to 0% and snapping
 back to 100% when the window rolls over:
 
 ```promql
-clamp((aiusage_rate_limit_reset_timestamp_seconds - time())
-      / aiusage_rate_limit_window_seconds, 0, 1)
+# x, the boundary in units of the window's own length
+(max by (harness, window) (last_over_time(
+    aiusage_rate_limit_reset_timestamp_seconds[7d])) - time())
+  / max by (harness, window) (last_over_time(
+    aiusage_rate_limit_window_seconds[7d]))
+
+x - floor(x)   # the sawtooth: 100% at every boundary, 0% just before the next
 ```
 
 The solid line is what is actually left. Above the dash the quota outlasts the
 window; below it the window outlasts the quota and you run dry early. The
 distance between them is the whole finding, and it is the same figure in both
 units — a percentage of the quota, and a percentage of the time.
+
+Three things in that expression are load-bearing:
+
+- **`x - floor(x)`, not a clamp.** A window's boundaries repeat every length,
+  so one stated boundary places all of them. Clamping instead pins the line at
+  0% the moment a reset passes and leaves it there; the fractional part walks
+  the clock into the next window and draws the tooth.
+- **`last_over_time(…[7d])`, not the live value.** A clock does not stop when
+  the seller stops answering. A window whose reset has passed is dropped from
+  the reading — the used figure it carried is worthless — but the boundary it
+  stated still says where the next one falls, so the pace line keeps drawing
+  through a stale token while the actual line correctly disappears. A week is
+  the longest window metered here.
+- **`max by (harness, window)`, not the raw series.** The seller can rename a
+  plan, and `plan` is a label: the old series is orphaned rather than ended,
+  and both would draw one line each under the same name.
 
 Only a window with both a reset and a length can be paced, and two of them get
 the missing half from the seller's own wording rather than from a field —
