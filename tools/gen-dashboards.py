@@ -19,6 +19,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import harness_quota as hq  # noqa: E402
 import harness_usage as hu  # noqa: E402
 
 DS = {"type": "prometheus", "uid": "rig-prom"}
@@ -997,6 +998,31 @@ def picked(metric, *extra, pick=PICK):
     return f'{metric}{{{",".join((pick, *extra))}}}'
 
 
+# One hue per seller, one shade per window. A seller added to SUBSCRIPTIONS
+# takes the next hue with no edit here.
+QUOTA_HUES = ["orange", "purple", "green", "blue", "red", "yellow"]
+
+# Grafana applies overrides in order and the last match wins, so the catch-all
+# shade is written before the windows that overrule it.
+QUOTA_SHADES = [(r".*", "dark-{hue}"), (r"weekly-.+", "super-light-{hue}"),
+                (r"weekly", "light-{hue}"), (r"session", "semi-dark-{hue}")]
+
+
+def quota_colours():
+    """One fixed colour per seller and window, carried by both of its lines.
+
+    The actual line and its pace line differ only in style, so a pair reads as
+    one window and no two sellers are ever drawn in the same hue.
+    """
+    out = []
+    for i, sub in enumerate(hq.SUBSCRIPTIONS):
+        hue = QUOTA_HUES[i % len(QUOTA_HUES)]
+        for window, shade in QUOTA_SHADES:
+            out.append(column(rf"^{sub.name} {window} (actual|even burn)$", matcher="byRegexp",
+                              color={"mode": "fixed", "fixedColor": shade.format(hue=hue)}))
+    return out
+
+
 def subscriptions(L):
     """One line per plan: what each window has left, and when it resets.
 
@@ -1038,7 +1064,7 @@ def subscriptions(L):
 
     # The even burn is the window's own clock: how much of it is left in time.
     # Spend uniformly from the reset and the quota tracks it exactly, so the
-    # gap between the two lines is the whole finding.
+    # gap between a window's two lines is the whole finding.
     even = (f'clamp((aiusage_rate_limit_reset_timestamp_seconds{{{PICK_HARNESS}}} - time()) '
             f'/ aiusage_rate_limit_window_seconds{{{PICK_HARNESS}}}, 0, 1)')
     ts(L, "Quota left, against spending it evenly", [
@@ -1052,7 +1078,7 @@ def subscriptions(L):
             "line is what is actually left. Above the dash is ahead of pace — the quota outlasts "
             "the window. Below it, the window outlasts the quota and you run dry early. Only "
             "windows whose seller declares a length can be paced.")
-    L.panels[-1]["fieldConfig"]["overrides"] = [
+    L.panels[-1]["fieldConfig"]["overrides"] = quota_colours() + [
         column(".*even burn", matcher="byRegexp",
                custom_lineStyle={"fill": "dash", "dash": [10, 10]},
                custom_lineWidth=1, custom_fillOpacity=0),
