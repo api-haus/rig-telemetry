@@ -204,19 +204,27 @@ class ClaudeCode(Subscription):
                      measured=time.time(), windows=windows)
 
     def _structured(self, data: dict) -> list[Window]:
-        out = []
+        out, group_resets = [], {}
         for limit in data.get("limits") or []:
             percent = number(limit.get("percent"))
             if percent is None:
                 continue
+            group = slug(str(limit.get("group") or limit.get("kind") or "limit"))
             label, seconds = self.kinds.get(limit.get("kind") or "", (None, None))
             if label is None:
                 model = ((limit.get("scope") or {}).get("model") or {}).get("display_name") or ""
-                group = limit.get("group") or limit.get("kind") or "limit"
-                label = f"{slug(group)}-{slug(model)}" if model else slug(group)
-                seconds = WEEKLY_SECONDS if str(limit.get("group")) == "weekly" else None
-            out.append(Window(label, percent / 100, epoch(limit.get("resets_at")), seconds))
-        return out
+                label = f"{group}-{slug(model)}" if model else group
+                seconds = WEEKLY_SECONDS if group == "weekly" else None
+            reset = epoch(limit.get("resets_at"))
+            if reset is not None and label == group:
+                group_resets[group] = reset
+            out.append((group, Window(label, percent / 100, reset, seconds)))
+        # A scoped share states no reset of its own until it is first spent. It
+        # is metered inside its group's window, so the group's reset is its own.
+        for group, window in out:
+            if window.resets_at is None:
+                window.resets_at = group_resets.get(group)
+        return [window for _, window in out]
 
     def _named(self, data: dict) -> list[Window]:
         """Older responses carry the two windows as named blocks instead."""
@@ -251,9 +259,9 @@ class KimiCode(Subscription):
         token = self.fresh(creds.get("access_token"), epoch(creds.get("expires_at")), "kimi")
         data = get(f"{self.base.rstrip('/')}/usages", token, {}, "Moonshot")
         windows = []
-        # The plan's own block declares no length, so it carries none. Its name
-        # is the CLI's ("Weekly limit"), and its reset time is the hard fact.
-        weekly = self._window(data.get("usage"), "weekly", None)
+        # The plan's own block states a reset but no length. Kimi's CLI calls
+        # it the weekly limit, so the name it is sold under is the length.
+        weekly = self._window(data.get("usage"), "weekly", WEEKLY_SECONDS)
         if weekly:
             windows.append(weekly)
         for entry in data.get("limits") or []:

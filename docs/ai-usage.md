@@ -359,9 +359,19 @@ its name: Claude's Fable share of the same week is `weekly-fable`, and a scoped
 model added tomorrow appears on its own rather than falling out of a list in
 this repo.
 
-`aiusage_rate_limit_window_seconds` carries a length only where the seller
-declares one. Kimi's plan window declares none — its reset time is the fact,
-and the name is the one Kimi's own CLI prints.
+Two windows are completed from what the seller says around them rather than
+from a field it fills in, because a window missing either half cannot be paced:
+
+- Kimi's plan block states a reset but no length. Kimi's own CLI calls it the
+  weekly limit, so the name it is sold under is the length: seven days.
+- Claude's Fable share states no reset until the share is first spent. The
+  seller puts it in the `weekly` group, and a share is metered inside its
+  group's window, so it takes that group's reset. A reset the seller does
+  state always wins.
+
+Both are derived from the seller's own wording, never from a figure chosen
+here. Everything else in `aiusage_rate_limit_window_seconds` and
+`aiusage_rate_limit_reset_timestamp_seconds` is stated outright.
 
 ### When the plan's name is not the seller's word for it
 
@@ -421,9 +431,15 @@ window; below it the window outlasts the quota and you run dry early. The
 distance between them is the whole finding, and it is the same figure in both
 units — a percentage of the quota, and a percentage of the time.
 
-Only a window whose seller declares a length can be paced. Kimi's weekly block
-declares none and Claude's Fable share carries no reset time, so neither gets a
-dashed line rather than getting a guessed one.
+Only a window with both a reset and a length can be paced, and two of them get
+the missing half from the seller's own wording rather than from a field —
+[Window names](#window-names) says which, and how.
+
+Colour keys the pair, not the seller: each window owns a hue, its actual line
+draws in it and its dashed pace line in the dark twin of it. Windows, not
+sellers, because one seller meters several and they must not read as shades of
+each other. `QUOTA_HUES` in `tools/gen-dashboards.py` hands the hues out, the
+windows every seller has first.
 
 ---
 

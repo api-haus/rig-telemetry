@@ -1084,8 +1084,9 @@ def subscriptions(L):
        desc="The dashed line is the window's own clock: what would be left had you started at "
             "the reset and spent evenly to the end, 100% down to 0% and back to 100%. The solid "
             "line is what is actually left. Above the dash is ahead of pace — the quota outlasts "
-            "the window. Below it, the window outlasts the quota and you run dry early. Only "
-            "windows whose seller declares a length can be paced.")
+            "the window. Below it, the window outlasts the quota and you run dry early. A window "
+            "is paced once it has both a reset and a length; `docs/ai-usage.md` names the two "
+            "that take the missing half from what the seller says around them.")
     L.panels[-1]["fieldConfig"]["overrides"] = quota_colours() + [
         column(".*even burn", matcher="byRegexp",
                custom_lineStyle={"fill": "dash", "dash": [10, 10]},
